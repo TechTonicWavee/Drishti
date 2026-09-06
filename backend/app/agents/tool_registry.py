@@ -12,6 +12,7 @@ allowed list. Nowhere else.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -139,6 +140,10 @@ delegation_log = get_file_logger("drishti.delegation", "delegation.log")
 # a consequence of the current configuration.
 MAX_DELEGATION_DEPTH = 1
 
+# Ceiling on how long executed code may run, whatever the model asks for. The
+# timeout argument is model-supplied, so it is clamped rather than trusted.
+MAX_SANDBOX_TIMEOUT = 30
+
 
 async def _search_knowledge_base(
     *, context: dict[str, Any], query: str, top_k: int | None = None
@@ -253,5 +258,61 @@ register(
         },
         func=_ask_coder_agent,
         summarize=lambda r: f"delegated; {len(r)} char reply",
+    )
+)
+
+
+async def _execute_code(
+    *, context: dict[str, Any], code: str, timeout_seconds: int = 10
+) -> dict[str, Any]:
+    """Run Python in the sandbox and return stdout, stderr and exit code."""
+    from app.services.sandbox import execute_code
+
+    # The Docker SDK is blocking. Running it in a thread keeps the event loop
+    # free, so other users' answers keep streaming while this code runs.
+    return await asyncio.to_thread(
+        execute_code,
+        code,
+        max(1, min(int(timeout_seconds), MAX_SANDBOX_TIMEOUT)),
+    )
+
+
+def _summarize_execution(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "unexpected result"
+    if result.get("timed_out"):
+        return "timed out"
+    return (
+        f"exit={result.get('exit_code')} "
+        f"stdout={len(result.get('stdout') or '')}B "
+        f"stderr={len(result.get('stderr') or '')}B"
+    )
+
+
+register(
+    Tool(
+        name="execute_code",
+        description=(
+            "Run Python code in an isolated sandbox and get back its stdout, "
+            "stderr and exit code. The sandbox has no network access and a "
+            "read-only filesystem apart from /tmp. Use it to verify that code "
+            "you have written actually runs before presenting it."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Complete, self-contained Python to run.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Seconds to allow before killing it (max 30).",
+                },
+            },
+            "required": ["code"],
+        },
+        func=_execute_code,
+        summarize=_summarize_execution,
     )
 )
