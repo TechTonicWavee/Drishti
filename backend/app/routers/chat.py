@@ -19,6 +19,8 @@ streaming behaviour and no chance of the two drifting apart.
 Frames on the wire:
 
     event: routing        one per turn, always first — which agent was picked
+    event: sources        reasoning turns only — documents used to ground the
+                          answer, possibly an empty list
     data:  {"delta": ...} one per token
     event: stream-error   the model failed mid-stream
     event: done           terminal; the client must close the EventSource
@@ -35,6 +37,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.services import knowledge_base
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
 from app.services.router import Task, classify
@@ -109,6 +112,72 @@ def _choose(
     )
 
 
+_GROUNDING_INSTRUCTIONS = (
+    "You have been given excerpts from the plant's internal documents.\n"
+    "- When the excerpts answer the question, base your answer on them and "
+    "name the source document you used.\n"
+    "- When they do not, say plainly that no internal document covers it "
+    "before answering from general knowledge. Never cite a source you did "
+    "not actually use."
+)
+
+
+async def _retrieve(message: str, client: ModelServingClient) -> list[dict]:
+    """Fetch chunks relevant enough to ground an answer.
+
+    Anything above the distance threshold is dropped here rather than shown,
+    which is what stops an unrelated question from citing an SOP. Retrieval
+    failure degrades to an ungrounded answer instead of failing the turn — a
+    missing embedding model should not take chat down with it.
+    """
+    try:
+        hits = await knowledge_base.search(
+            message, settings.rag_top_k, client=client
+        )
+    except ModelServingError:
+        return []
+    return [h for h in hits if h["distance"] <= settings.rag_max_distance]
+
+
+def _unique_sources(hits: list[dict]) -> list[dict]:
+    """One entry per document, carrying its closest match."""
+    best: dict[str, float] = {}
+    for hit in hits:
+        source = hit["source"]
+        best[source] = min(best.get(source, hit["distance"]), hit["distance"])
+    return [
+        {"source": source, "distance": round(distance, 4)}
+        for source, distance in sorted(best.items(), key=lambda kv: kv[1])
+    ]
+
+
+def _grounded_messages(message: str, hits: list[dict]) -> list[dict[str, str]]:
+    """Build the conversation, folding retrieved context into the system turn.
+
+    The base system prompt is repeated here on purpose: ModelServingClient
+    only injects it when no system message is present, so building one without
+    it would silently drop the English-language rule.
+    """
+    if not hits:
+        return [{"role": "user", "content": message}]
+
+    excerpts = "\n\n".join(
+        f"[{i}] source: {hit['source']} (chunk {hit['chunk_index']})\n{hit['text']}"
+        for i, hit in enumerate(hits, start=1)
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"{settings.system_prompt}\n\n"
+                f"{_GROUNDING_INSTRUCTIONS}\n\n"
+                f"Excerpts:\n{excerpts}"
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
+
+
 def _sse(data: dict[str, object], event: str | None = None) -> str:
     """Frame one SSE message.
 
@@ -149,10 +218,17 @@ async def _sse_events(
         yield _sse({}, event="done")
         return
 
+    # Only the reasoning path is grounded. A coding request is answered from
+    # the model's own knowledge, and the SOP corpus would only be noise in it.
+    hits: list[dict] = []
+    if route.task == "reasoning":
+        hits = await _retrieve(message, client)
+        yield _sse({"sources": _unique_sources(hits)}, event="sources")
+
     try:
         deltas = await client.chat_completion(
             model=route.model,
-            messages=[{"role": "user", "content": message}],
+            messages=_grounded_messages(message, hits),
         )
         async for delta in deltas:
             yield _sse({"delta": delta})
