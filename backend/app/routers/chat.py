@@ -29,35 +29,40 @@ Frames on the wire:
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agents.base_agent import Agent, Delta, Execution, Sources, ToolUse
 from app.agents.coding_agent import CoderAgent
 from app.agents.reasoning_agent import ReasoningAgent
+from app.agents.vision_agent import (
+    IMAGE_SUFFIXES,
+    PDF_SUFFIXES,
+    VisionAgent,
+)
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
+from app.core.config import settings
 from app.services.router import Task, classify
 
 router = APIRouter(tags=["chat"])
 
-# The router's output maps to exactly one agent class. Vision is recognised by
-# the classifier but has no agent yet.
-_AGENTS: dict[Task, type[Agent] | None] = {
+# The router's output maps to exactly one agent class.
+_AGENTS: dict[Task, type[Agent]] = {
     "reasoning": ReasoningAgent,
     "coding": CoderAgent,
-    "vision": None,
+    "vision": VisionAgent,
 }
 
-_VISION_NOT_IMPLEMENTED = (
-    "Image understanding is not wired up yet. This turn was routed to the "
-    "vision agent because an image was attached, but no vision agent exists. "
-    "Ask a text question, or send the message without the attachment."
-)
+# backend/app/routers/chat.py -> backend/
+_UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "uploads"
+_ACCEPTED_SUFFIXES = IMAGE_SUFFIXES | PDF_SUFFIXES
 
 
 class ChatRequest(BaseModel):
@@ -72,7 +77,7 @@ class ChatRequest(BaseModel):
 @dataclass(frozen=True)
 class Route:
     task: Task
-    agent: Agent | None
+    agent: Agent
     agent_name: str
     model: str | None
     reason: str
@@ -87,12 +92,7 @@ def _choose(
 ) -> Route:
     """Classify the turn and build the agent that will handle it."""
     decision = classify(message, has_attachment, attachment_name)
-    agent_class = _AGENTS[decision.task]
-
-    if agent_class is None:
-        return Route(decision.task, None, "Vision Agent", None, decision.reason)
-
-    agent = agent_class(client, override)
+    agent = _AGENTS[decision.task](client, override)
     reason = (
         f"caller override (router suggested: {decision.reason})"
         if override
@@ -117,6 +117,7 @@ async def _sse_events(
     has_attachment: bool,
     attachment_name: str | None,
     client: ModelServingClient,
+    attachment_path: Path | None = None,
 ) -> AsyncIterator[str]:
     route = _choose(message, override, has_attachment, attachment_name, client)
 
@@ -132,15 +133,12 @@ async def _sse_events(
         event="routing",
     )
 
-    if route.agent is None:
-        # A known gap, not a failure: deliver it as ordinary assistant text so
-        # it reads as an answer rather than an error.
-        yield _sse({"delta": _VISION_NOT_IMPLEMENTED})
-        yield _sse({}, event="done")
-        return
+    agent_context: dict[str, object] = {}
+    if attachment_path is not None:
+        agent_context["attachment_path"] = str(attachment_path)
 
     try:
-        async for event in route.agent.run_stream(message, {}):
+        async for event in route.agent.run_stream(message, agent_context):
             if isinstance(event, Delta):
                 yield _sse({"delta": event.text})
             elif isinstance(event, ToolUse):
@@ -178,9 +176,13 @@ def _stream(
     has_attachment: bool,
     attachment_name: str | None,
     client: ModelServingClient,
+    attachment_path: Path | None = None,
 ) -> StreamingResponse:
     return StreamingResponse(
-        _sse_events(message, override, has_attachment, attachment_name, client),
+        _sse_events(
+            message, override, has_attachment, attachment_name, client,
+            attachment_path,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -217,3 +219,69 @@ async def chat_stream(
 ) -> StreamingResponse:
     """EventSource-compatible mirror of POST /chat."""
     return _stream(message, model, has_attachment, attachment_name, client)
+
+
+async def _save_upload(file: UploadFile) -> Path:
+    """Write an upload to disk under a generated name.
+
+    The client's filename is never used as a path. It is attacker-controlled
+    and could contain traversal segments; only its suffix is kept, and only
+    after checking it against the accepted set.
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _ACCEPTED_SUFFIXES:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Unsupported file type '{suffix or 'unknown'}'. "
+                f"Accepted: {', '.join(sorted(_ACCEPTED_SUFFIXES))}"
+            ),
+        )
+
+    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    destination = _UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
+
+    written = 0
+    with destination.open("wb") as handle:
+        # Streamed in chunks so an oversized upload is refused partway through
+        # rather than after the whole thing is in memory.
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > settings.max_upload_bytes:
+                handle.close()
+                destination.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"File exceeds the {settings.max_upload_bytes // (1024*1024)}MB limit."
+                    ),
+                )
+            handle.write(chunk)
+
+    if written == 0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="The uploaded file was empty.")
+
+    return destination
+
+
+@router.post("/chat/upload")
+async def chat_upload(
+    file: UploadFile = File(...),
+    message: str = Form(default=""),
+    client: ModelServingClient = Depends(get_model_client),
+) -> StreamingResponse:
+    """Accept an image or PDF and stream the vision agent's reading of it.
+
+    Streams the same SSE frames as /chat, so a client already able to render a
+    chat turn needs no second response format.
+    """
+    saved = await _save_upload(file)
+    return _stream(
+        message,
+        None,
+        True,
+        file.filename or saved.name,
+        client,
+        attachment_path=saved,
+    )

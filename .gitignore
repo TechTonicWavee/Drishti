@@ -29,3 +29,6 @@ backend/logs/
 
 # Embedded vector store (rebuild with scripts/ingest_samples.py)
 backend/data/chroma/
+
+# Uploaded files (runtime artefact)
+backend/data/uploads/
