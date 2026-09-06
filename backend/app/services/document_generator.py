@@ -40,6 +40,39 @@ ACCENT_HEX: Final = "C15F3C"
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
+# Keys a model plausibly uses when it decides to send a structured object where
+# a string was asked for. Ordered by how likely each is to hold the real text.
+_TEXT_KEYS: Final = (
+    "description", "text", "finding", "summary", "detail", "content",
+    "observation", "value", "item",
+)
+
+
+def _as_text(item: Any) -> str:
+    """Coerce whatever the model sent into a readable line.
+
+    Schemas are a request, not a guarantee. Asked for a list of strings, a
+    model will sometimes send a list of objects instead — and stringifying one
+    of those puts a raw Python dict into a document a human is meant to sign.
+    Pulling the meaningful field out is the difference between a usable
+    deliverable and an obviously machine-generated one.
+    """
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in _TEXT_KEYS:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        # No recognised key: join the scalar values rather than losing the row.
+        joined = " ".join(
+            str(v).strip() for v in item.values() if isinstance(v, (str, int, float))
+        )
+        return joined.strip()
+    if isinstance(item, (list, tuple)):
+        return " ".join(_as_text(part) for part in item).strip()
+    return str(item).strip()
+
 
 class DocumentGenerationError(RuntimeError):
     """The document could not be built."""
@@ -99,7 +132,9 @@ def generate_approval_note(
     document.add_paragraph()
     document.add_heading("Findings", level=1)
     for finding in findings:
-        document.add_paragraph(str(finding).strip(), style="List Number")
+        text = _as_text(finding)
+        if text:
+            document.add_paragraph(text, style="List Number")
 
     document.add_paragraph()
     document.add_heading("Approval", level=1)
@@ -164,7 +199,7 @@ def generate_summary_deck(title: str, sections: list[dict[str, Any]]) -> str:
             # text_frame always starts with one empty paragraph; reuse it
             # rather than leaving a blank bullet above the first real one.
             paragraph = body.paragraphs[0] if index == 0 else body.add_paragraph()
-            paragraph.text = str(bullet).strip()
+            paragraph.text = _as_text(bullet)
             paragraph.level = 0
             paragraph.font.size = PptPt(18)
             bullet_count += 1
@@ -207,6 +242,9 @@ def generate_calculation_sheet(title: str, steps: list[dict[str, Any]]) -> str:
         # Accept several key spellings: the values come from a model, and
         # rejecting a row because it said "input" instead of "formula" would
         # lose an audit step over a synonym.
+        if not isinstance(step, dict):
+            # A bare string step still deserves a row rather than being dropped.
+            step = {"description": _as_text(step)}
         values = [
             step.get("step") or step.get("label") or offset,
             step.get("description") or step.get("desc") or "",
@@ -214,7 +252,7 @@ def generate_calculation_sheet(title: str, steps: list[dict[str, Any]]) -> str:
             step.get("result") or step.get("value") or "",
         ]
         for column, value in enumerate(values, start=1):
-            cell = sheet.cell(row=row, column=column, value=str(value))
+            cell = sheet.cell(row=row, column=column, value=_as_text(value))
             cell.border = border
             cell.alignment = Alignment(vertical="top", wrap_text=column == 2)
 
