@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import chat, health
+from app.routers import chat, health, system
 from app.services.model_client import ModelServingClient
 
 
@@ -46,3 +46,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(chat.router)
+app.include_router(system.router)
