@@ -116,6 +116,80 @@ class ModelServingClient:
             return self._stream_deltas(payload)
         return await self._collect(payload)
 
+    async def stream_events(
+        self,
+        model: str,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream a turn that may produce text, tool calls, or both.
+
+        Yields {"type": "delta", "text": ...} as tokens arrive and, once the
+        stream ends, a single {"type": "tool_calls", "calls": [...]} if the
+        model asked for any.
+
+        This exists so an agent needs only one generation per turn. Probing
+        for tool calls with a separate non-streaming request would mean
+        generating every direct answer twice — once to discover there were no
+        tools to call, then again to stream it.
+        """
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": self._apply_system_prompt(messages),
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = list(tools)
+
+        # Tool calls arrive split across chunks, keyed by index: the name comes
+        # first and the JSON arguments accumulate a fragment at a time.
+        pending: dict[int, dict[str, Any]] = {}
+
+        try:
+            async with self._client.stream(
+                "POST", "chat/completions", json=payload
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise ModelServingError(self._describe_status_response(response))
+
+                async for line in response.aiter_lines():
+                    chunk = _parse_sse_chunk(line)
+                    if chunk is None:
+                        continue
+                    if chunk is _StreamEnd:
+                        break
+
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+
+                    content = delta.get("content")
+                    if content:
+                        yield {"type": "delta", "text": content}
+
+                    for fragment in delta.get("tool_calls") or []:
+                        index = fragment.get("index", 0)
+                        slot = pending.setdefault(
+                            index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if fragment.get("id"):
+                            slot["id"] = fragment["id"]
+                        function = fragment.get("function") or {}
+                        if function.get("name"):
+                            slot["name"] = function["name"]
+                        if function.get("arguments"):
+                            slot["arguments"] += function["arguments"]
+        except httpx.HTTPError as exc:
+            raise ModelServingError(self._describe_transport(exc)) from exc
+
+        if pending:
+            yield {
+                "type": "tool_calls",
+                "calls": [pending[i] for i in sorted(pending)],
+            }
+
     async def chat_message(
         self,
         model: str,
@@ -275,6 +349,24 @@ class ModelServingClient:
 
 class _StreamEnd:
     """Marker for the `[DONE]` sentinel; never yielded to callers."""
+
+
+def _parse_sse_chunk(line: str) -> dict[str, Any] | type[_StreamEnd] | None:
+    """Parse one SSE line into its JSON chunk.
+
+    Returns the decoded object, `_StreamEnd` at the terminating sentinel, or
+    None for lines carrying nothing (keep-alives, comments, blank separators).
+    """
+    line = line.strip()
+    if not line or line.startswith(":") or not line.startswith("data:"):
+        return None
+    data = line[len("data:") :].strip()
+    if data == _DONE:
+        return _StreamEnd
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return None
 
 
 def _parse_sse_line(line: str) -> str | type[_StreamEnd] | None:
