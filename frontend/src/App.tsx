@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import AirGapBadge from '@/components/AirGapBadge'
 import Chat from '@/components/Chat'
+import KnowledgeBase from '@/components/KnowledgeBase'
 import { ApiError, fetchHealth, type Health } from '@/lib/api'
 
 type Status =
@@ -59,6 +60,8 @@ export default function App() {
         <section aria-live="polite">
           <StatusLine status={status} onRetry={recheck} />
         </section>
+
+        <KnowledgeBase />
 
         <div className="border-t border-border pt-10">
           <Chat />

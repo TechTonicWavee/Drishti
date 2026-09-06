@@ -1,0 +1,31 @@
+SAMPLE DOCUMENT — FICTIONAL CONTENT FOR DEMONSTRATION ONLY
+
+FLARE SYSTEM OPERATION AND MONITORING
+Document reference: SAMPLE-SOP-FLARE-009, Revision 1
+
+1. PURPOSE
+This procedure covers routine operation and monitoring of the elevated flare
+serving Units 1 through 4.
+
+2. PILOT INTEGRITY
+2.1 All three pilots shall be confirmed lit at the start of every shift by
+thermocouple reading, not by visual inspection alone.
+2.2 A pilot thermocouple reading below 250 degrees Celsius shall be treated as
+a failed pilot and reported immediately.
+2.3 Never isolate more than one pilot fuel line at a time.
+
+3. SMOKE AND STEAM
+3.1 Maintain smokeless operation using assist steam. Target a steam-to-relief
+mass ratio of 0.3 to 0.5.
+3.2 Excess steam causes flame instability and wastes energy. Above a ratio of
+0.7, reduce assist steam in 10 percent increments.
+
+4. LIQUID CARRYOVER
+4.1 The knockout drum level shall not exceed 60 percent. Above this, liquid
+carryover to the flare tip becomes likely and can cause burning rain.
+4.2 Pump out to slops if the level reaches 55 percent.
+
+5. RECORDING
+5.1 Log flare gas flow, steam flow and knockout drum level hourly.
+5.2 Any flaring event exceeding 30 minutes shall be reported to the
+Environment cell within one hour.

@@ -548,7 +548,7 @@ function UploadZone({
       <span>
         {over
           ? 'Drop to read it'
-          : 'Drop a scanned report or photo here, or click to browse — PNG, JPG, TIFF or PDF'}
+          : 'Read a scanned report or photo — drop it here or click to browse. Not indexed; use Knowledge base above to add searchable documents.'}
       </span>
     </div>
   )
