@@ -1,0 +1,57 @@
+SAMPLE DOCUMENT — FICTIONAL CONTENT FOR DEMONSTRATION ONLY
+This is synthetic sample data written for the Drishti Workbench demo. It is
+not a real MRPL procedure and must not be used for actual plant operations.
+
+CONFINED SPACE ENTRY PROCEDURE
+Document reference: SAMPLE-SOP-HSE-021, Revision 5
+
+1. PURPOSE
+This procedure defines the controls required before any person enters a
+confined space. Confined space entry is the highest risk routine activity
+carried out on the site, and the majority of fatalities in similar incidents
+across the industry involve either an untested atmosphere or an attempted
+rescue by an unprotected colleague.
+
+2. DEFINITION
+A confined space is any enclosure with limited openings for entry and exit,
+unfavourable natural ventilation, and which is not designed for continuous
+occupancy. This includes vessels, columns, tanks, sewers, pits, and excavations
+deeper than 1.2 metres.
+
+3. ENTRY PERMIT
+3.1 No person shall enter a confined space without a valid Confined Space
+Entry Permit signed by the Area Authority and the Entry Supervisor.
+3.2 The permit is valid for one shift only. It must be re-validated at the
+start of each shift and after any break in work exceeding two hours.
+3.3 The permit shall be displayed at the point of entry for the duration of
+the work.
+
+4. ISOLATION AND PREPARATION
+4.1 The space shall be isolated from all sources of hazardous energy and
+material by double block and bleed, or by physical disconnection and blinding.
+Valve closure alone is not acceptable isolation.
+4.2 The space shall be drained, purged and ventilated before testing.
+4.3 All blinds shall be listed on the blind register and verified in place by
+the Entry Supervisor.
+
+5. ATMOSPHERIC TESTING
+5.1 Test the atmosphere before entry and continuously during occupancy.
+5.2 Acceptance criteria for entry are: oxygen between 19.5 and 23.5 percent by
+volume; flammable gas below 5 percent LEL; hydrogen sulphide below 5 ppm; and
+carbon monoxide below 25 ppm.
+5.3 Test at multiple depths. Heavier-than-air gases accumulate at the bottom of
+a vessel and a reading taken at the manway may not be representative.
+5.4 If any reading falls outside the acceptance criteria, all persons shall
+evacuate immediately and the permit is void.
+
+6. ATTENDANT AND RESCUE
+6.1 A trained attendant shall remain stationed at the entry point for the
+entire duration of the entry, and shall not enter the space under any
+circumstances.
+6.2 The attendant shall maintain continuous communication with entrants and
+keep a written log of every person entering and leaving.
+6.3 Rescue equipment, including harness, retrieval line and breathing
+apparatus, shall be positioned at the entry point before entry begins.
+6.4 In an emergency the attendant shall raise the alarm and initiate the
+rescue plan. Under no circumstances shall the attendant attempt an unassisted
+entry rescue.

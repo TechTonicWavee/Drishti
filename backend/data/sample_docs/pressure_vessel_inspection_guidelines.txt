@@ -1,0 +1,60 @@
+SAMPLE DOCUMENT — FICTIONAL CONTENT FOR DEMONSTRATION ONLY
+This is synthetic sample data written for the Drishti Workbench demo. It is
+not a real MRPL procedure and must not be used for actual plant operations.
+
+PRESSURE VESSEL INSPECTION GUIDELINES
+Document reference: SAMPLE-SOP-MECH-007, Revision 2
+
+1. SCOPE
+These guidelines cover in-service inspection of pressure vessels in refinery
+service, including separators, knockout drums, reactors and storage bullets.
+They do not cover fired heaters, piping, or atmospheric storage tanks, each of
+which is governed by its own procedure.
+
+2. INSPECTION INTERVALS
+2.1 External visual inspection shall be carried out at intervals not
+exceeding five years, or at one quarter of the calculated remaining life,
+whichever is shorter.
+2.2 Internal inspection shall be carried out at intervals not exceeding ten
+years, or at one half of the calculated remaining life, whichever is shorter.
+2.3 Where a vessel is in severe cyclic or corrosive service, the Inspection
+Engineer shall shorten these intervals and record the justification in the
+vessel file.
+2.4 An interval may never be extended without a documented fitness-for-service
+assessment approved by the Chief Inspector.
+
+3. EXTERNAL VISUAL INSPECTION
+3.1 Examine the shell, heads, nozzles and reinforcing pads for corrosion,
+bulging, mechanical damage and coating breakdown.
+3.2 Inspect supports, saddles and anchor bolts. Pay particular attention to
+corrosion under insulation at support contact points, which is the most common
+location for undetected wall loss.
+3.3 Examine all attached small-bore connections and vents. These fail more
+often than the vessel shell itself.
+3.4 Record findings with photographs and mark any suspect areas for thickness
+measurement.
+
+4. THICKNESS MEASUREMENT
+4.1 Take ultrasonic thickness readings at established condition monitoring
+locations. Use the same locations at each inspection so that corrosion rates
+can be trended meaningfully.
+4.2 A minimum of four readings shall be taken per shell course, at the four
+quadrant positions.
+4.3 Calculate the corrosion rate from the current and previous readings, and
+recalculate remaining life. If measured thickness is below the minimum
+required thickness, the vessel shall be taken out of service immediately and
+referred to the Chief Inspector.
+
+5. INTERNAL INSPECTION
+5.1 Internal inspection requires the vessel to be isolated, drained, purged
+and gas tested, and a confined space entry permit to be in force.
+5.2 Examine internal surfaces for pitting, cracking, erosion and damage to
+internals such as trays, demister pads and distributors.
+5.3 Where stress corrosion cracking is suspected, apply wet fluorescent
+magnetic particle testing to welds and heat affected zones.
+
+6. RECORDS
+6.1 All findings shall be entered into the vessel file within ten working
+days of the inspection.
+6.2 The vessel file shall contain the inspection history, thickness trend
+data, calculated remaining life, and the date of the next required inspection.

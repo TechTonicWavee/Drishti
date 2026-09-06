@@ -1,0 +1,59 @@
+SAMPLE DOCUMENT — FICTIONAL CONTENT FOR DEMONSTRATION ONLY
+This is synthetic sample data written for the Drishti Workbench demo. It is
+not a real MRPL procedure and must not be used for actual plant operations.
+
+STANDARD SHUTDOWN PROCEDURE — FLUID CATALYTIC CRACKING (FCC) UNIT
+Document reference: SAMPLE-SOP-FCC-014, Revision 3
+
+1. PURPOSE
+This procedure describes the controlled shutdown of the FCC unit for planned
+turnaround or maintenance. A controlled shutdown protects the catalyst
+inventory, avoids thermal shock to the regenerator internals, and leaves the
+unit in a safe, isolated condition for entry.
+
+2. PRE-SHUTDOWN REQUIREMENTS
+2.1 The Shift Superintendent shall confirm the shutdown window with the
+Production Planning group at least 72 hours in advance.
+2.2 Confirm that the flare system has adequate capacity for the anticipated
+relief load, and notify the flare operator before feed reduction begins.
+2.3 Verify that nitrogen supply pressure is at least 6 barg at the unit
+battery limit. Nitrogen is required continuously through steps 5 and 6.
+2.4 Complete the pre-shutdown checklist and obtain sign-off from the Unit
+Engineer.
+
+3. FEED REDUCTION
+3.1 Reduce fresh feed rate in steps of 10 percent of design, holding at each
+step for a minimum of 20 minutes to allow the reactor temperature profile to
+stabilise.
+3.2 Maintain riser outlet temperature above 480 degrees Celsius throughout
+feed reduction. Below this temperature, incomplete vaporisation may cause
+liquid carryover into the reactor.
+3.3 When feed reaches 30 percent of design, begin reducing catalyst
+circulation in parallel with further feed cuts.
+
+4. CATALYST CIRCULATION AND REGENERATOR
+4.1 Stop fresh catalyst addition once feed is below 30 percent.
+4.2 Burn off remaining coke in the regenerator, holding the dense bed
+temperature between 660 and 700 degrees Celsius until flue gas carbon monoxide
+falls below 200 ppm.
+4.3 Do not exceed 730 degrees Celsius in the regenerator dense bed at any
+point. Exceeding this limit risks permanent damage to the catalyst and to the
+cyclone refractory.
+
+5. STEAM PURGE AND COOLING
+5.1 Cut feed completely and immediately establish steam to the riser and
+stripper.
+5.2 Purge the reactor and regenerator with steam for a minimum of four hours,
+then switch to nitrogen.
+5.3 Cool at a maximum rate of 30 degrees Celsius per hour. Faster cooling
+risks thermal shock and refractory spalling.
+
+6. ISOLATION AND HANDOVER
+6.1 Isolate the unit with double block and bleed on all hydrocarbon lines.
+Install blinds at the battery limit and record each blind on the blind list.
+6.2 Purge with nitrogen until hydrocarbon content is below 1 percent LEL at
+all sample points.
+6.3 The unit may not be released for entry until atmospheric testing is
+complete and a confined space entry permit has been issued.
+6.4 Record final conditions in the shift log and hand over to the Turnaround
+Coordinator.
