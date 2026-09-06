@@ -13,6 +13,7 @@ allowed list. Nowhere else.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -35,6 +36,12 @@ class Tool:
     # long — whole document chunks — and a log nobody can read is not an audit
     # trail.
     summarize: Callable[[Any], str]
+
+    # Argument names whose values must never be written to the log. Used for
+    # arguments that carry arbitrary content — model-written code above all —
+    # so tools.log does not become the dumping ground that sandbox.log was
+    # carefully designed not to be.
+    sensitive_args: frozenset[str] = frozenset()
 
     def spec(self) -> dict[str, Any]:
         """This tool as an OpenAI-compatible function definition."""
@@ -107,7 +114,7 @@ async def call(
     except TypeError as exc:
         # Almost always the model inventing an argument name.
         log.error('agent=%s | tool=%s | BAD ARGS %s | %s', agent, name,
-                  json.dumps(arguments)[:120], exc)
+                  _redact(arguments, tool.sensitive_args), exc)
         raise ToolError(f"Bad arguments for {name}: {exc}") from exc
     except Exception as exc:
         log.error('agent=%s | tool=%s | FAILED | %s: %s', agent, name,
@@ -116,10 +123,28 @@ async def call(
 
     log.info(
         'agent=%s | tool=%s | args=%s | result=%s',
-        agent, name, json.dumps(arguments, default=str)[:120],
+        agent, name, _redact(arguments, tool.sensitive_args),
         tool.summarize(result),
     )
     return result
+
+
+def _redact(arguments: dict[str, Any], sensitive: frozenset[str]) -> str:
+    """Render arguments for the log, replacing sensitive values with a digest.
+
+    The digest is the same sha256 prefix sandbox.log records, so an entry here
+    can still be tied to its execution record without either log holding the
+    content.
+    """
+    shown: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if key in sensitive:
+            text = value if isinstance(value, str) else json.dumps(value, default=str)
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            shown[key] = f"<sha256={digest}, {len(text)} chars>"
+        else:
+            shown[key] = value
+    return json.dumps(shown, default=str)[:200]
 
 
 # ---------------------------------------------------------------------------
@@ -314,5 +339,7 @@ register(
         },
         func=_execute_code,
         summarize=_summarize_execution,
+        # Never write model-written code into the audit log.
+        sensitive_args=frozenset({"code"}),
     )
 )
