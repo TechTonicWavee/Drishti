@@ -78,21 +78,66 @@ export default function Chat() {
     })
   }, [])
 
+  // One handler for both transports. Text turns arrive over EventSource;
+  // uploads arrive over a fetch stream, because EventSource cannot issue the
+  // multipart POST an upload needs. Sharing this keeps the two from drifting.
+  const applyEvent = useCallback(
+    (name: string, data: string) => {
+      try {
+        const payload = JSON.parse(data)
+        switch (name) {
+          case 'routing':
+            patchLast((m) => ({ ...m, routing: payload as Routing }))
+            break
+          case 'sources':
+            if (payload.sources?.length) {
+              patchLast((m) => ({ ...m, sources: payload.sources as Source[] }))
+            }
+            break
+          case 'tool':
+            patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), payload as ToolCall] }))
+            break
+          case 'execution':
+            patchLast((m) => ({
+              ...m,
+              executions: [...(m.executions ?? []), payload as ExecutionResult],
+            }))
+            break
+          case 'message':
+            if (payload.delta) {
+              patchLast((m) => ({ ...m, content: m.content + payload.delta }))
+            }
+            break
+          case 'stream-error':
+            setError(payload.message ?? 'The model server reported an error.')
+            break
+        }
+      } catch {
+        // A single unparseable frame is not worth killing the stream over.
+      }
+    },
+    [patchLast],
+  )
+
+  const startTurn = useCallback((userText: string) => {
+    setError(null)
+    // The empty assistant message is the buffer that deltas append to.
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: userText },
+      { role: 'assistant', content: '' },
+    ])
+    setStreaming(true)
+  }, [])
+
   const send = useCallback(
     (event: React.FormEvent) => {
       event.preventDefault()
       const prompt = input.trim()
       if (!prompt || streaming) return
 
-      setError(null)
       setInput('')
-      // The empty assistant message is the buffer that deltas append to.
-      setMessages((prev) => [
-        ...prev,
-        { role: 'user', content: prompt },
-        { role: 'assistant', content: '' },
-      ])
-      setStreaming(true)
+      startTurn(prompt)
 
       // No model parameter on "Auto" — the router decides.
       const params = new URLSearchParams({ message: prompt })
@@ -101,75 +146,12 @@ export default function Chat() {
       const source = new EventSource(`/api/chat/stream?${params}`)
       sourceRef.current = source
 
-      // Always arrives before the first token, so the label is in place by the
-      // time any text shows up.
-      source.addEventListener('routing', (e) => {
-        try {
-          const routing = JSON.parse((e as MessageEvent<string>).data) as Routing
-          patchLast((m) => ({ ...m, routing }))
-        } catch {
-          // A missing label is not worth discarding the answer for.
-        }
-      })
-
-      // Reasoning turns only, and only for chunks that cleared the relevance
-      // threshold — an empty list here means nothing was close enough, which
-      // is why an unrelated question shows no sources at all.
-      source.addEventListener('sources', (e) => {
-        try {
-          const { sources } = JSON.parse((e as MessageEvent<string>).data) as {
-            sources?: Source[]
-          }
-          if (sources?.length) patchLast((m) => ({ ...m, sources }))
-        } catch {
-          // Losing the citation list should not cost us the answer.
-        }
-      })
-
-      // One per tool the agent ran. Shown in the UI so delegation and
-      // retrieval are visible as they happen, not only in the audit logs.
-      source.addEventListener('tool', (e) => {
-        try {
-          const call = JSON.parse((e as MessageEvent<string>).data) as ToolCall
-          patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), call] }))
-        } catch {
-          // A missing tool line should not cost us the answer.
-        }
-      })
-
-      // Real sandbox output. Each attempt of a self-correction arrives as its
-      // own event and is rendered separately, so a failed first run stays
-      // visible instead of a retry looking like a first-time success.
-      source.addEventListener('execution', (e) => {
-        try {
-          const run = JSON.parse((e as MessageEvent<string>).data) as ExecutionResult
-          patchLast((m) => ({ ...m, executions: [...(m.executions ?? []), run] }))
-        } catch {
-          // Losing a result block should not cost us the answer.
-        }
-      })
-
-      source.onmessage = (e: MessageEvent<string>) => {
-        try {
-          const { delta } = JSON.parse(e.data) as { delta?: string }
-          if (delta) patchLast((m) => ({ ...m, content: m.content + delta }))
-        } catch {
-          // A single unparseable frame is not worth killing the stream over.
-        }
+      for (const name of ['routing', 'sources', 'tool', 'execution', 'stream-error']) {
+        source.addEventListener(name, (e) =>
+          applyEvent(name, (e as MessageEvent<string>).data),
+        )
       }
-
-      // The model failed. Distinct from EventSource's own 'error' event, which
-      // fires for transport problems.
-      source.addEventListener('stream-error', (e) => {
-        try {
-          const { message } = JSON.parse((e as MessageEvent<string>).data) as {
-            message?: string
-          }
-          setError(message ?? 'The model server reported an error.')
-        } catch {
-          setError('The model server reported an error.')
-        }
-      })
+      source.onmessage = (e: MessageEvent<string>) => applyEvent('message', e.data)
 
       // EventSource reconnects on its own when a stream ends, which would
       // re-run the prompt. The server's explicit 'done' event is the signal
@@ -184,7 +166,60 @@ export default function Chat() {
         closeStream()
       }
     },
-    [closeStream, input, override, patchLast, streaming],
+    [applyEvent, closeStream, input, override, startTurn, streaming],
+  )
+
+  const upload = useCallback(
+    async (file: File) => {
+      if (streaming) return
+      const note = input.trim()
+      setInput('')
+      startTurn(note ? `📎 ${file.name}\n\n${note}` : `📎 ${file.name}`)
+
+      try {
+        const form = new FormData()
+        form.append('file', file)
+        if (note) form.append('message', note)
+
+        const response = await fetch('/api/chat/upload', {
+          method: 'POST',
+          body: form,
+        })
+        if (!response.ok || !response.body) {
+          const body = await response.json().catch(() => null)
+          throw new Error(body?.detail ?? `Upload failed (HTTP ${response.status})`)
+        }
+
+        // Hand-parse the SSE stream. The frames are identical to the ones
+        // EventSource would deliver; only the transport differs.
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let boundary = buffer.indexOf('\n\n')
+          while (boundary !== -1) {
+            const frame = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            let name = 'message'
+            let data = ''
+            for (const line of frame.split('\n')) {
+              if (line.startsWith('event:')) name = line.slice(6).trim()
+              else if (line.startsWith('data:')) data += line.slice(5).trim()
+            }
+            if (data) applyEvent(name, data)
+            boundary = buffer.indexOf('\n\n')
+          }
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Upload failed.')
+      } finally {
+        setStreaming(false)
+      }
+    },
+    [applyEvent, input, startTurn, streaming],
   )
 
   return (
@@ -258,6 +293,8 @@ export default function Chat() {
         </p>
       )}
 
+      <UploadZone onFile={upload} disabled={streaming} />
+
       <form onSubmit={send} className="flex gap-2">
         <input
           value={input}
@@ -275,6 +312,68 @@ export default function Chat() {
         </button>
       </form>
     </section>
+  )
+}
+
+function UploadZone({
+  onFile,
+  disabled,
+}: {
+  onFile: (file: File) => void
+  disabled: boolean
+}) {
+  const [over, setOver] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const take = (file: File | undefined) => {
+    if (file && !disabled) onFile(file)
+  }
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault()
+        if (!disabled) setOver(true)
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setOver(false)
+        take(e.dataTransfer.files?.[0])
+      }}
+      onClick={() => !disabled && inputRef.current?.click()}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') inputRef.current?.click()
+      }}
+      aria-label="Upload a scanned report or photograph"
+      className={[
+        'flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-[13px] transition-colors',
+        disabled
+          ? 'cursor-not-allowed border-border/60 text-muted-foreground/50'
+          : over
+            ? 'border-primary bg-primary/5 text-foreground'
+            : 'border-border text-muted-foreground hover:border-primary/60 hover:bg-card',
+      ].join(' ')}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/tiff,image/bmp,image/webp,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          take(e.target.files?.[0])
+          // Reset so selecting the same file twice fires onChange again.
+          e.target.value = ''
+        }}
+      />
+      <span>
+        {over
+          ? 'Drop to read it'
+          : 'Drop a scanned report or photo here, or click to browse — PNG, JPG, TIFF or PDF'}
+      </span>
+    </div>
   )
 }
 
