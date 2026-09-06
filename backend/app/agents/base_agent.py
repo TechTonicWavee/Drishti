@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -58,13 +59,23 @@ class Execution:
 
 
 @dataclass(frozen=True)
+class Artifact:
+    """A real file was generated and can be downloaded."""
+
+    filename: str
+    kind: str
+    url: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class Sources:
     """Documents the answer is grounded in."""
 
     sources: list[dict[str, Any]] = field(default_factory=list)
 
 
-AgentEvent = Delta | ToolUse | Sources | Execution
+AgentEvent = Delta | ToolUse | Sources | Execution | Artifact
 
 
 class Agent:
@@ -86,6 +97,17 @@ class Agent:
     def model(self) -> str:
         """The bound model. Subclasses name a settings field; this resolves it."""
         return self._model or settings.default_model
+
+    @property
+    def tool_model(self) -> str:
+        """The model used for tool-calling turns.
+
+        Usually the agent's own model. It is separate because not every model
+        that is good at an agent's core job can call tools at all — the vision
+        model cannot, and Ollama rejects such a request outright — so such an
+        agent runs its handoff turn on a tool-capable model instead.
+        """
+        return self.model
 
     @property
     def system_prompt(self) -> str:
@@ -115,6 +137,20 @@ class Agent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": message},
         ]
+        async for event in self.tool_loop(conversation, context):
+            yield event
+
+    async def tool_loop(
+        self,
+        conversation: list[dict[str, Any]],
+        context: dict[str, Any],
+    ) -> AsyncIterator[AgentEvent]:
+        """Run the tool-calling loop over an already-built conversation.
+
+        Separated from run_stream so a subclass can seed the conversation with
+        work it did by other means — the vision agent puts its extracted
+        findings in before handing over — and still get the same loop.
+        """
         # Tools receive the shared client and the calling agent's name, which
         # is what makes delegation and its logging possible.
         tool_context = {**context, "client": self.client, "agent": self.name}
@@ -124,7 +160,7 @@ class Agent:
             calls: list[dict[str, Any]] = []
             try:
                 async for event in self.client.stream_events(
-                    self.model, conversation, tools=specs or None
+                    self.tool_model, conversation, tools=specs or None
                 ):
                     if event["type"] == "delta":
                         yield Delta(event["text"])
@@ -164,7 +200,7 @@ class Agent:
         # Ran out of rounds with tools still being requested. Ask once more
         # without tools so the turn ends with an answer rather than silence.
         try:
-            deltas = await self.client.chat_completion(self.model, conversation)
+            deltas = await self.client.chat_completion(self.tool_model, conversation)
             async for text in deltas:
                 yield Delta(text)
         except ModelServingError as exc:
@@ -215,6 +251,13 @@ class Agent:
         # the real output rather than only the model's account of it. Both
         # attempts of a self-correction surface, which is the point: a silent
         # first failure would make a retry look like a first success.
+        # A generator tool returns a path on disk. Surface it as a downloadable
+        # artifact so the UI can offer the file rather than describing it.
+        if name in _DOCUMENT_TOOLS and isinstance(result, str) and result:
+            artifact = _as_artifact(name, result)
+            if artifact is not None:
+                yield artifact
+
         if name == "execute_code" and isinstance(result, dict):
             yield Execution(
                 code=arguments.get("code", ""),
@@ -239,6 +282,25 @@ class Agent:
         if isinstance(result, str):
             return result
         return json.dumps(result, default=str, indent=2)
+
+
+_DOCUMENT_TOOLS = frozenset(
+    {"generate_approval_note", "generate_summary_deck", "generate_calculation_sheet"}
+)
+
+
+def _as_artifact(tool_name: str, path_str: str) -> Artifact | None:
+    """Describe a generated file for the UI, or None if it is not on disk."""
+    path = Path(path_str)
+    if not path.is_file():
+        return None
+    return Artifact(
+        filename=path.name,
+        kind=tool_name.removeprefix("generate_"),
+        # Relative so the browser stays same-origin; the dev server proxies it.
+        url=f"/api/files/{path.name}",
+        size_bytes=path.stat().st_size,
+    )
 
 
 def _unique_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
