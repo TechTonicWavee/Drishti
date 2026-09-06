@@ -135,6 +135,7 @@ class Agent:
         """Execute a turn, yielding events as they happen."""
         conversation: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
+            *history_messages(context),
             {"role": "user", "content": message},
         ]
         async for event in self.tool_loop(conversation, context):
@@ -315,6 +316,35 @@ def _as_artifact(record: dict[str, str]) -> Artifact | None:
 # Enough of the chunk to show which part of a document was used, without
 # reproducing the whole thing in the chat transcript.
 _EXCERPT_CHARS = 320
+
+
+def history_messages(context: dict[str, Any]) -> list[dict[str, str]]:
+    """Prior turns from the context, ready to prepend to a conversation.
+
+    Trimmed and bounded here rather than trusted from the caller: the history
+    arrives from the browser, and an unbounded one would push the retrieved
+    context out of the model's window — turning a memory feature into a
+    retrieval regression.
+    """
+    raw = context.get("history")
+    if not isinstance(raw, list):
+        return []
+
+    cleaned: list[dict[str, str]] = []
+    for entry in raw[-settings.max_history_messages :]:
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        content = entry.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        text = content.strip()
+        if not text:
+            continue
+        if len(text) > settings.max_history_chars:
+            text = text[: settings.max_history_chars] + "…"
+        cleaned.append({"role": role, "content": text})
+    return cleaned
 
 
 def _unique_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:

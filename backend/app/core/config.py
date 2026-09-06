@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # memory rather than after.
     max_upload_bytes: int = 25 * 1024 * 1024
 
+    # Prior turns replayed to the model so follow-up questions resolve. Kept
+    # small on purpose: the whole history is re-sent with every request, and a
+    # long one both slows generation and crowds out retrieved context.
+    max_history_messages: int = 8
+
+    # Each replayed message is truncated to this. A previous answer only needs
+    # to supply the antecedent for "it" or "that", not be reproduced in full.
+    max_history_chars: int = 1200
+
     # How many chunks retrieval returns per question.
     rag_top_k: int = 4
 

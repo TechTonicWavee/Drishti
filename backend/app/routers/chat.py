@@ -74,8 +74,16 @@ _UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "uploads"
 _ACCEPTED_SUFFIXES = IMAGE_SUFFIXES | PDF_SUFFIXES
 
 
+class HistoryTurn(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    # Prior turns, replayed so follow-ups like "and what about step 3?"
+    # resolve. Bounded again server-side; see base_agent.history_messages.
+    history: list[HistoryTurn] = Field(default_factory=list)
     # Optional. Omit it and the router picks the agent and its bound model;
     # supply it to override the model the chosen agent runs on.
     model: str | None = Field(default=None, min_length=1)
@@ -127,6 +135,7 @@ async def _sse_events(
     attachment_name: str | None,
     client: ModelServingClient,
     attachment_path: Path | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     route = _choose(message, override, has_attachment, attachment_name, client)
 
@@ -142,7 +151,7 @@ async def _sse_events(
         event="routing",
     )
 
-    agent_context: dict[str, object] = {}
+    agent_context: dict[str, object] = {"history": history or []}
     if attachment_path is not None:
         agent_context["attachment_path"] = str(attachment_path)
         agent_context["attachment_name"] = attachment_name
@@ -197,11 +206,12 @@ def _stream(
     attachment_name: str | None,
     client: ModelServingClient,
     attachment_path: Path | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> StreamingResponse:
     return StreamingResponse(
         _sse_events(
             message, override, has_attachment, attachment_name, client,
-            attachment_path,
+            attachment_path, history,
         ),
         media_type="text/event-stream",
         headers={
@@ -226,6 +236,7 @@ async def chat(
         request.has_attachment,
         request.attachment_name,
         client,
+        history=[turn.model_dump() for turn in request.history],
     )
 
 
@@ -235,10 +246,30 @@ async def chat_stream(
     model: str | None = Query(default=None),
     has_attachment: bool = Query(default=False),
     attachment_name: str | None = Query(default=None),
+    history: str | None = Query(
+        default=None,
+        description="JSON array of prior {role, content} turns.",
+    ),
     client: ModelServingClient = Depends(get_model_client),
 ) -> StreamingResponse:
-    """EventSource-compatible mirror of POST /chat."""
-    return _stream(message, model, has_attachment, attachment_name, client)
+    """EventSource-compatible mirror of POST /chat.
+
+    History rides in the query string because EventSource can only issue a
+    GET. The client keeps it short for that reason; it is bounded again on
+    this side, and a malformed value is dropped rather than failing the turn —
+    losing context is a worse answer, not a broken one.
+    """
+    turns: list[dict[str, str]] = []
+    if history:
+        try:
+            parsed = json.loads(history)
+            if isinstance(parsed, list):
+                turns = [t for t in parsed if isinstance(t, dict)]
+        except json.JSONDecodeError:
+            turns = []
+    return _stream(
+        message, model, has_attachment, attachment_name, client, history=turns
+    )
 
 
 # Uploads are working files, not a document store. Anything older than this is
@@ -308,6 +339,7 @@ async def _save_upload(file: UploadFile) -> Path:
 async def chat_upload(
     file: UploadFile = File(...),
     message: str = Form(default=""),
+    history: str = Form(default=""),
     client: ModelServingClient = Depends(get_model_client),
 ) -> StreamingResponse:
     """Accept an image or PDF and stream the vision agent's reading of it.
@@ -316,6 +348,14 @@ async def chat_upload(
     chat turn needs no second response format.
     """
     saved = await _save_upload(file)
+    turns: list[dict[str, str]] = []
+    if history:
+        try:
+            parsed = json.loads(history)
+            if isinstance(parsed, list):
+                turns = [t for t in parsed if isinstance(t, dict)]
+        except json.JSONDecodeError:
+            turns = []
     return _stream(
         message,
         None,
@@ -323,4 +363,5 @@ async def chat_upload(
         file.filename or saved.name,
         client,
         attachment_path=saved,
+        history=turns,
     )

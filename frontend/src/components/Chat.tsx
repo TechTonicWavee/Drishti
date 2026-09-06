@@ -17,6 +17,12 @@ const OVERRIDE_MODELS = ['qwen2.5:7b', 'qwen2.5-coder:7b'] as const
 
 // One card treatment, used by every block on the page so the interface reads
 // as a single product rather than a pile of separately-styled features.
+// Prior turns replayed so follow-ups resolve. Kept deliberately small: this
+// rides in the query string, because EventSource can only issue a GET, and an
+// over-long URL is refused by the server rather than merely being slow.
+const HISTORY_TURNS = 6
+const HISTORY_CHARS = 500
+
 const CARD = 'rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgba(43,39,37,0.05)]'
 const LABEL = 'text-[11px] uppercase tracking-[0.14em] text-muted-foreground'
 
@@ -74,6 +80,28 @@ export default function Chat() {
   // When the current turn began, in unix seconds — the window the trace asks
   // the backend for.
   const turnStartRef = useRef<number>(0)
+
+  // Read through a ref so the send/upload callbacks do not have to be rebuilt
+  // on every streamed token.
+  const messagesRef = useRef<Message[]>([])
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  const history = useCallback(
+    () =>
+      messagesRef.current
+        .filter((m) => m.content.trim())
+        .slice(-HISTORY_TURNS)
+        .map((m) => ({
+          role: m.role,
+          content:
+            m.content.length > HISTORY_CHARS
+              ? m.content.slice(0, HISTORY_CHARS) + '…'
+              : m.content,
+        })),
+    [],
+  )
 
   const patchLast = useCallback((patch: (m: Message) => Message) => {
     setMessages((prev) => {
@@ -172,11 +200,15 @@ export default function Chat() {
       if (!prompt || streaming) return
 
       setInput('')
+      // Captured before startTurn appends this turn, so the history is the
+      // conversation as it stood when the question was asked.
+      const prior = history()
       startTurn(prompt)
 
       // No model parameter on "Auto" — the router decides.
       const params = new URLSearchParams({ message: prompt })
       if (override !== AUTO) params.set('model', override)
+      if (prior.length) params.set('history', JSON.stringify(prior))
 
       const source = new EventSource(`/api/chat/stream?${params}`)
       sourceRef.current = source
@@ -203,7 +235,7 @@ export default function Chat() {
         closeStream()
       }
     },
-    [applyEvent, closeStream, input, override, startTurn, streaming],
+    [applyEvent, closeStream, history, input, override, startTurn, streaming],
   )
 
   const upload = useCallback(
@@ -211,12 +243,14 @@ export default function Chat() {
       if (streaming) return
       const note = input.trim()
       setInput('')
+      const prior = history()
       startTurn(note ? `${file.name}\n\n${note}` : file.name)
 
       try {
         const form = new FormData()
         form.append('file', file)
         if (note) form.append('message', note)
+        if (prior.length) form.append('history', JSON.stringify(prior))
 
         const response = await fetch('/api/chat/upload', { method: 'POST', body: form })
         if (!response.ok || !response.body) {
@@ -254,7 +288,7 @@ export default function Chat() {
         void loadTrace()
       }
     },
-    [applyEvent, input, loadTrace, startTurn, streaming],
+    [applyEvent, history, input, loadTrace, startTurn, streaming],
   )
 
   return (

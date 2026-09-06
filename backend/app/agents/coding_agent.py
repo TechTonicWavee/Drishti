@@ -7,7 +7,14 @@ from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
 from app.agents import tool_registry
-from app.agents.base_agent import Agent, AgentEvent, Delta, Execution, ToolUse
+from app.agents.base_agent import (
+    Agent,
+    AgentEvent,
+    Delta,
+    Execution,
+    ToolUse,
+    history_messages,
+)
 from app.agents.tool_registry import ToolError
 from app.core.config import settings
 from app.services.model_client import ModelServingClient, ModelServingError
@@ -73,6 +80,7 @@ class CoderAgent(Agent):
     ) -> AsyncIterator[AgentEvent]:
         conversation: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
+            *history_messages(context),
             {"role": "user", "content": message},
         ]
         tool_context = {**context, "client": self.client, "agent": self.name}
