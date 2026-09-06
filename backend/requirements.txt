@@ -18,3 +18,7 @@ pydantic-settings==2.15.0
 # internet on first call, which would break the air gap.
 chromadb==1.5.9
 pypdf==6.17.0
+
+# Used only by scripts/traffic_monitor.py, the demo-time verification tool.
+# The application itself never imports it.
+psutil==7.2.2
