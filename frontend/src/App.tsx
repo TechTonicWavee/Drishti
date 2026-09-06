@@ -36,11 +36,12 @@ export default function App() {
   const recheck = useCallback(() => setAttempt((n) => n + 1), [])
 
   return (
-    <main className="min-h-dvh px-6 py-20 sm:py-28">
+    <main className="min-h-dvh px-6 py-16 sm:py-24">
       <AirGapBadge />
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-10">
+
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-12">
         <header className="flex flex-col gap-3">
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
             MRPL · On-premise
           </p>
           <h1 className="font-heading text-4xl leading-tight sm:text-5xl">
@@ -53,30 +54,30 @@ export default function App() {
           </p>
         </header>
 
-        <section
-          aria-live="polite"
-          className="rounded-2xl border border-border bg-card p-7 shadow-[0_1px_2px_rgba(43,39,37,0.04)]"
-        >
-          <StatusPanel status={status} onRetry={recheck} />
+        {/* Compact when healthy: a green light does not deserve the same space
+            as the work. It expands only when something is wrong. */}
+        <section aria-live="polite">
+          <StatusLine status={status} onRetry={recheck} />
         </section>
 
         <div className="border-t border-border pt-10">
           <Chat />
         </div>
 
-        <footer className="text-[13px] leading-relaxed text-muted-foreground">
-          Inference runs on a local Ollama instance. See{' '}
-          <code className="rounded-md bg-muted px-1.5 py-0.5 text-[12px]">
-            .env.example
+        <footer className="border-t border-border pt-6 text-[12px] leading-relaxed text-muted-foreground">
+          Inference, retrieval, code execution and document generation all run
+          on this machine. See{' '}
+          <code className="rounded-md bg-muted px-1.5 py-0.5 text-[11px]">
+            docs/air_gap_proof.md
           </code>{' '}
-          — no API keys are required, by design.
+          to verify it.
         </footer>
       </div>
     </main>
   )
 }
 
-function StatusPanel({
+function StatusLine({
   status,
   onRetry,
 }: {
@@ -85,65 +86,41 @@ function StatusPanel({
 }) {
   if (status.kind === 'checking') {
     return (
-      <div className="flex items-center gap-3">
-        <Dot className="animate-pulse bg-muted-foreground/50" />
-        <p className="text-[15px] text-muted-foreground">
-          Checking backend…
-        </p>
-      </div>
+      <p className="flex items-center gap-2.5 text-[13px] text-muted-foreground">
+        <span className="size-2 shrink-0 animate-pulse rounded-full bg-muted-foreground/50" />
+        Checking backend…
+      </p>
     )
   }
 
   if (status.kind === 'connected') {
     return (
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <Dot className="bg-brand" />
-          <p className="text-[15px] font-medium">
-            Backend connected — fully offline
-          </p>
-        </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 border-t border-border pt-4 text-[13px]">
-          <dt className="text-muted-foreground">Status</dt>
-          <dd className="font-mono">{status.health.status}</dd>
-          <dt className="text-muted-foreground">Offline</dt>
-          <dd className="font-mono">{String(status.health.offline)}</dd>
-        </dl>
-      </div>
+      <p className="flex items-center gap-2.5 text-[13px]">
+        <span className="size-2 shrink-0 rounded-full bg-brand" />
+        <span className="font-medium">Backend connected — fully offline</span>
+        <span className="font-mono text-[11px] text-muted-foreground">
+          status={status.health.status} · offline={String(status.health.offline)}
+        </span>
+      </p>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start gap-3">
-        <Dot className="mt-[7px] bg-destructive" />
-        <div className="flex flex-col gap-1.5">
-          <p className="text-[15px] font-medium text-destructive">
-            Backend unreachable
-          </p>
-          <p className="max-w-prose text-[13px] leading-relaxed text-muted-foreground">
-            {status.message}
-          </p>
-        </div>
-      </div>
-      <div className="border-t border-border pt-4">
-        <button
-          type="button"
-          onClick={onRetry}
-          className="rounded-lg bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          Try again
-        </button>
-      </div>
+    <div className="flex flex-col gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3.5">
+      <p className="flex items-center gap-2.5 text-[14px] font-medium text-destructive">
+        <span className="size-2 shrink-0 rounded-full bg-destructive" />
+        Backend unreachable
+      </p>
+      <p className="max-w-prose text-[13px] leading-relaxed text-muted-foreground">
+        {status.message}
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="self-start rounded-xl bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+      >
+        Try again
+      </button>
     </div>
-  )
-}
-
-function Dot({ className = '' }: { className?: string }) {
-  return (
-    <span
-      aria-hidden
-      className={`size-2 shrink-0 rounded-full ${className}`}
-    />
   )
 }

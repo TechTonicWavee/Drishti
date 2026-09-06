@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import AgentTrace, { type TraceStep } from '@/components/AgentTrace'
+
 /**
- * Minimal streaming chat box.
+ * The chat surface.
  *
- * Uses the browser's native EventSource, which can only issue GET requests —
- * so it connects to GET /api/chat/stream rather than POST /chat. Both routes
- * run the same server-side generator; see backend/app/routers/chat.py.
- *
- * The model is chosen by the backend router. The selector below is an escape
- * hatch, not the normal path: leaving it on "Auto" sends no model at all.
+ * Two transports feed one event handler. Text turns arrive over EventSource;
+ * uploads arrive over a fetch stream, because EventSource cannot issue the
+ * multipart POST an upload needs. Sharing `applyEvent` keeps the frames from
+ * being handled differently by accident — the transport differs, the protocol
+ * does not.
  */
 
 const AUTO = 'auto'
 const OVERRIDE_MODELS = ['qwen2.5:7b', 'qwen2.5-coder:7b'] as const
+
+// One card treatment, used by every block on the page so the interface reads
+// as a single product rather than a pile of separately-styled features.
+const CARD = 'rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgba(43,39,37,0.05)]'
+const LABEL = 'text-[11px] uppercase tracking-[0.14em] text-muted-foreground'
 
 type Routing = {
   task: string
@@ -25,13 +31,11 @@ type Routing = {
 type Source = {
   source: string
   distance: number
+  chunk_index?: number
+  excerpt?: string
 }
 
-type ToolCall = {
-  tool: string
-  summary: string
-  ok: boolean
-}
+type ToolCall = { tool: string; summary: string; ok: boolean }
 
 type ExecutionResult = {
   code: string
@@ -56,6 +60,7 @@ type Message = {
   tools?: ToolCall[]
   executions?: ExecutionResult[]
   artifacts?: ArtifactFile[]
+  trace?: TraceStep[]
 }
 
 export default function Chat() {
@@ -66,29 +71,43 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null)
 
   const sourceRef = useRef<EventSource | null>(null)
+  // When the current turn began, in unix seconds — the window the trace asks
+  // the backend for.
+  const turnStartRef = useRef<number>(0)
 
-  const closeStream = useCallback(() => {
-    sourceRef.current?.close()
-    sourceRef.current = null
-    setStreaming(false)
-  }, [])
-
-  // Don't leave a socket open if the component goes away mid-answer.
-  useEffect(() => closeStream, [closeStream])
-
-  // Both handlers below patch the last message, which is always the assistant
-  // turn currently being filled in.
   const patchLast = useCallback((patch: (m: Message) => Message) => {
     setMessages((prev) => {
+      if (prev.length === 0) return prev
       const next = [...prev]
       next[next.length - 1] = patch(next[next.length - 1])
       return next
     })
   }, [])
 
-  // One handler for both transports. Text turns arrive over EventSource;
-  // uploads arrive over a fetch stream, because EventSource cannot issue the
-  // multipart POST an upload needs. Sharing this keeps the two from drifting.
+  // Pulled once the turn ends, from the same log files the audit trail uses.
+  const loadTrace = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/system/trace?since_epoch=${turnStartRef.current}`,
+      )
+      if (!response.ok) return
+      const body = (await response.json()) as { steps: TraceStep[] }
+      if (body.steps?.length) patchLast((m) => ({ ...m, trace: body.steps }))
+    } catch {
+      // The trace is supporting evidence; losing it must not disturb the answer.
+    }
+  }, [patchLast])
+
+  const closeStream = useCallback(() => {
+    sourceRef.current?.close()
+    sourceRef.current = null
+    setStreaming(false)
+    void loadTrace()
+  }, [loadTrace])
+
+  // Don't leave a socket open if the component goes away mid-answer.
+  useEffect(() => () => sourceRef.current?.close(), [])
+
   const applyEvent = useCallback(
     (name: string, data: string) => {
       try {
@@ -135,7 +154,9 @@ export default function Chat() {
 
   const startTurn = useCallback((userText: string) => {
     setError(null)
-    // The empty assistant message is the buffer that deltas append to.
+    // A second's grace: log timestamps have second resolution, so a step
+    // written in the same second the turn began would otherwise be missed.
+    turnStartRef.current = Date.now() / 1000 - 1
     setMessages((prev) => [
       ...prev,
       { role: 'user', content: userText },
@@ -161,12 +182,7 @@ export default function Chat() {
       sourceRef.current = source
 
       for (const name of [
-        'routing',
-        'sources',
-        'tool',
-        'execution',
-        'artifact',
-        'stream-error',
+        'routing', 'sources', 'tool', 'execution', 'artifact', 'stream-error',
       ]) {
         source.addEventListener(name, (e) =>
           applyEvent(name, (e as MessageEvent<string>).data),
@@ -180,8 +196,8 @@ export default function Chat() {
       source.addEventListener('done', closeStream)
 
       source.onerror = () => {
-        // Fires on a dropped connection; also fires after close() in some
-        // browsers, so only surface it while a stream is genuinely live.
+        // Also fires after close() in some browsers, so only surface it while
+        // a stream is genuinely live.
         if (sourceRef.current !== source) return
         setError('Lost connection to the backend while streaming.')
         closeStream()
@@ -195,24 +211,21 @@ export default function Chat() {
       if (streaming) return
       const note = input.trim()
       setInput('')
-      startTurn(note ? `📎 ${file.name}\n\n${note}` : `📎 ${file.name}`)
+      startTurn(note ? `${file.name}\n\n${note}` : file.name)
 
       try {
         const form = new FormData()
         form.append('file', file)
         if (note) form.append('message', note)
 
-        const response = await fetch('/api/chat/upload', {
-          method: 'POST',
-          body: form,
-        })
+        const response = await fetch('/api/chat/upload', { method: 'POST', body: form })
         if (!response.ok || !response.body) {
           const body = await response.json().catch(() => null)
           throw new Error(body?.detail ?? `Upload failed (HTTP ${response.status})`)
         }
 
-        // Hand-parse the SSE stream. The frames are identical to the ones
-        // EventSource would deliver; only the transport differs.
+        // Hand-parse the SSE stream: the frames are identical to the ones
+        // EventSource delivers, only the transport differs.
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -238,77 +251,91 @@ export default function Chat() {
         setError(e instanceof Error ? e.message : 'Upload failed.')
       } finally {
         setStreaming(false)
+        void loadTrace()
       }
     },
-    [applyEvent, input, startTurn, streaming],
+    [applyEvent, input, loadTrace, startTurn, streaming],
   )
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between gap-4">
-        <h2 className="font-heading text-xl">Chat</h2>
-        <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+    <section className="flex flex-col gap-6">
+      <header className="flex items-baseline justify-between gap-4">
+        <h2 className="font-heading text-2xl">Workbench</h2>
+        <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
           Model
           <select
             value={override}
             onChange={(e) => setOverride(e.target.value)}
             disabled={streaming}
-            className="rounded-md border border-border bg-card px-2 py-1 text-[13px] text-foreground"
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] text-foreground shadow-[0_1px_2px_rgba(43,39,37,0.04)] outline-none focus-visible:border-ring"
           >
             <option value={AUTO}>Auto (router decides)</option>
             {OVERRIDE_MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
+              <option key={m} value={m}>{m}</option>
             ))}
           </select>
         </label>
-      </div>
+      </header>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-7">
         {messages.length === 0 && (
-          <p className="text-[13px] text-muted-foreground">
-            No messages yet. Everything below runs on this machine.
+          <p className="text-[14px] leading-relaxed text-muted-foreground">
+            Ask about a procedure, request a script, or drop a scanned report
+            below. Everything runs on this machine.
           </p>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className="flex flex-col gap-1">
-            <span
-              className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground"
-              title={m.routing?.reason}
-            >
-              {m.role === 'user' ? 'You' : formatRouting(m.routing)}
-            </span>
-            {m.tools && m.tools.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                {m.tools.map((t, j) => (
-                  <span key={j} title={t.summary}>
-                    {j > 0 && ' · '}
-                    {t.ok ? '🔧' : '⚠️'} {t.tool}
-                  </span>
-                ))}
+
+        {messages.map((m, i) =>
+          m.role === 'user' ? (
+            <div key={i} className="flex justify-end">
+              <p className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-secondary px-4 py-3 text-[15px] leading-relaxed">
+                {m.content}
               </p>
-            )}
-            <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
-              {m.content}
-              {streaming && i === messages.length - 1 && (
-                <span className="ml-0.5 inline-block animate-pulse">▍</span>
+            </div>
+          ) : (
+            <article key={i} className="flex flex-col gap-3">
+              <span className={LABEL} title={m.routing?.reason}>
+                {formatRouting(m.routing)}
+              </span>
+
+              {m.tools && m.tools.length > 0 && (
+                <p className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  {m.tools.map((t, j) => (
+                    <span key={j} title={t.summary}>
+                      {t.ok ? '🔧' : '⚠️'} {t.tool}
+                    </span>
+                  ))}
+                </p>
               )}
-            </p>
-            {m.artifacts?.map((file, k) => (
-              <DeliverableCard key={k} file={file} />
-            ))}
-            {m.executions?.map((run, k) => (
-              <ExecutionBlock key={k} run={run} index={k} total={m.executions!.length} />
-            ))}
-            {m.sources && m.sources.length > 0 && (
-              <p className="text-[12px] text-muted-foreground">
-                Sources:{' '}
-                {m.sources.map((s) => s.source).join(', ')}
-              </p>
-            )}
-          </div>
-        ))}
+
+              {m.content && (
+                <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
+                  {m.content}
+                  {streaming && i === messages.length - 1 && (
+                    <span className="ml-0.5 inline-block animate-pulse">▍</span>
+                  )}
+                </p>
+              )}
+
+              {m.artifacts?.map((file, k) => (
+                <DeliverableCard key={k} file={file} />
+              ))}
+
+              {m.executions?.map((run, k) => (
+                <ExecutionBlock
+                  key={k}
+                  run={run}
+                  index={k}
+                  total={m.executions!.length}
+                />
+              ))}
+
+              {m.sources && m.sources.length > 0 && <Citations sources={m.sources} />}
+
+              {m.trace && m.trace.length > 0 && <AgentTrace steps={m.trace} />}
+            </article>
+          ),
+        )}
       </div>
 
       {error && (
@@ -317,25 +344,53 @@ export default function Chat() {
         </p>
       )}
 
-      <UploadZone onFile={upload} disabled={streaming} />
+      <div className="flex flex-col gap-3">
+        <UploadZone onFile={upload} disabled={streaming} />
 
-      <form onSubmit={send} className="flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask something…"
-          disabled={streaming}
-          className="flex-1 rounded-lg border border-border bg-card px-3 py-2 text-[15px] outline-none focus-visible:border-ring"
-        />
-        <button
-          type="submit"
-          disabled={streaming || !input.trim()}
-          className="rounded-lg bg-primary px-4 py-2 text-[14px] font-medium text-primary-foreground disabled:opacity-40"
-        >
-          {streaming ? 'Streaming…' : 'Send'}
-        </button>
-      </form>
+        <form onSubmit={send} className="flex gap-2">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask something…"
+            disabled={streaming}
+            className={`flex-1 ${CARD} px-4 py-3 text-[15px] outline-none focus-visible:border-ring`}
+          />
+          <button
+            type="submit"
+            disabled={streaming || !input.trim()}
+            className="rounded-2xl bg-primary px-5 py-3 text-[14px] font-medium text-primary-foreground shadow-[0_1px_2px_rgba(43,39,37,0.08)] transition-colors hover:bg-primary/90 disabled:opacity-40"
+          >
+            {streaming ? 'Working…' : 'Send'}
+          </button>
+        </form>
+      </div>
     </section>
+  )
+}
+
+function Citations({ sources }: { sources: Source[] }) {
+  return (
+    <div className={`${CARD} px-4 py-3`}>
+      <p className={`${LABEL} mb-2`}>Sources</p>
+      <div className="flex flex-col gap-2">
+        {sources.map((s, i) => (
+          <details key={i} className="group">
+            <summary className="cursor-pointer list-none text-[13px] text-foreground marker:content-none">
+              <span className="text-muted-foreground group-open:text-brand">▸ </span>
+              {s.source}
+              {typeof s.chunk_index === 'number' && s.chunk_index >= 0 && (
+                <span className="text-muted-foreground"> · part {s.chunk_index + 1}</span>
+              )}
+            </summary>
+            {s.excerpt && (
+              <blockquote className="mt-2 border-l-2 border-brand/50 pl-3 text-[13px] leading-relaxed text-muted-foreground">
+                {s.excerpt}
+              </blockquote>
+            )}
+          </details>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -357,11 +412,11 @@ function DeliverableCard({ file }: { file: ArtifactFile }) {
   const kb = Math.max(1, Math.round(file.size_bytes / 1024))
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
-      <span aria-hidden className="text-[22px] leading-none">
+    <div className={`${CARD} flex items-center gap-4 px-4 py-3.5`}>
+      <span aria-hidden className="text-[24px] leading-none">
         {FILE_ICONS[extension] ?? '📎'}
       </span>
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 flex-col gap-0.5">
         <span className="truncate text-[13px] font-medium" title={file.filename}>
           {file.filename}
         </span>
@@ -374,10 +429,65 @@ function DeliverableCard({ file }: { file: ArtifactFile }) {
       <a
         href={file.url}
         download={file.filename}
-        className="ml-auto shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        className="ml-auto shrink-0 rounded-xl bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
       >
         Download
       </a>
+    </div>
+  )
+}
+
+function ExecutionBlock({
+  run,
+  index,
+  total,
+}: {
+  run: ExecutionResult
+  index: number
+  total: number
+}) {
+  const failed = run.timed_out || run.exit_code !== 0
+  return (
+    <div className={`${CARD} overflow-hidden`}>
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-4 py-2">
+        <span className={LABEL}>
+          {total > 1 ? `Run ${index + 1} of ${total}` : 'Sandboxed run'}
+        </span>
+        <span
+          className={[
+            'text-[11px] font-medium',
+            failed ? 'text-destructive' : 'text-muted-foreground',
+          ].join(' ')}
+        >
+          {run.timed_out ? 'timed out' : `exit ${run.exit_code}`}
+        </span>
+      </div>
+
+      {/* Plain monospace rather than a syntax highlighter: every highlighter
+          worth using ships as a CDN script or a sizeable bundle, and this app
+          may not load anything over the network. */}
+      <pre className="overflow-x-auto px-4 py-3 font-mono text-[12px] leading-relaxed">
+        {run.code}
+      </pre>
+
+      <div className="border-t border-border bg-muted/20">
+        <div className={`${LABEL} px-4 pt-2`}>Execution output</div>
+        {run.stdout.trim() && (
+          <pre className="overflow-x-auto px-4 py-2 font-mono text-[12px] leading-relaxed">
+            {run.stdout.trimEnd()}
+          </pre>
+        )}
+        {run.stderr.trim() && (
+          <pre className="overflow-x-auto px-4 py-2 font-mono text-[12px] leading-relaxed text-destructive">
+            {run.stderr.trimEnd()}
+          </pre>
+        )}
+        {!run.stdout.trim() && !run.stderr.trim() && (
+          <p className="px-4 py-2 text-[12px] text-muted-foreground">
+            {run.timed_out ? 'Killed on timeout before producing output.' : 'No output.'}
+          </p>
+        )}
+      </div>
     </div>
   )
 }
@@ -416,12 +526,12 @@ function UploadZone({
       }}
       aria-label="Upload a scanned report or photograph"
       className={[
-        'flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-[13px] transition-colors',
+        'flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-6 text-center text-[13px] transition-colors',
         disabled
           ? 'cursor-not-allowed border-border/60 text-muted-foreground/50'
           : over
-            ? 'border-primary bg-primary/5 text-foreground'
-            : 'border-border text-muted-foreground hover:border-primary/60 hover:bg-card',
+            ? 'border-brand bg-brand/5 text-foreground'
+            : 'border-border text-muted-foreground hover:border-brand/60 hover:bg-card',
       ].join(' ')}
     >
       <input
@@ -440,63 +550,6 @@ function UploadZone({
           ? 'Drop to read it'
           : 'Drop a scanned report or photo here, or click to browse — PNG, JPG, TIFF or PDF'}
       </span>
-    </div>
-  )
-}
-
-function ExecutionBlock({
-  run,
-  index,
-  total,
-}: {
-  run: ExecutionResult
-  index: number
-  total: number
-}) {
-  const failed = run.timed_out || run.exit_code !== 0
-  return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/50 px-3 py-1.5">
-        <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-          {total > 1 ? `Run ${index + 1} of ${total}` : 'Sandboxed run'}
-        </span>
-        <span
-          className={[
-            'text-[11px] font-medium',
-            failed ? 'text-destructive' : 'text-muted-foreground',
-          ].join(' ')}
-        >
-          {run.timed_out ? 'timed out' : `exit ${run.exit_code}`}
-        </span>
-      </div>
-
-      {/* Plain monospace rather than a syntax highlighter: every highlighter
-          worth using ships as a CDN script or a sizeable bundle, and this app
-          may not load anything over the network. */}
-      <pre className="overflow-x-auto px-3 py-2 font-mono text-[12px] leading-relaxed">
-        {run.code}
-      </pre>
-
-      <div className="border-t border-border bg-muted/25">
-        <div className="px-3 pt-1.5 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-          Execution output
-        </div>
-        {run.stdout.trim() && (
-          <pre className="overflow-x-auto px-3 py-1.5 font-mono text-[12px] leading-relaxed">
-            {run.stdout.trimEnd()}
-          </pre>
-        )}
-        {run.stderr.trim() && (
-          <pre className="overflow-x-auto px-3 py-1.5 font-mono text-[12px] leading-relaxed text-destructive">
-            {run.stderr.trimEnd()}
-          </pre>
-        )}
-        {!run.stdout.trim() && !run.stderr.trim() && (
-          <p className="px-3 py-1.5 text-[12px] text-muted-foreground">
-            {run.timed_out ? 'Killed on timeout before producing output.' : 'No output.'}
-          </p>
-        )}
-      </div>
     </div>
   )
 }
