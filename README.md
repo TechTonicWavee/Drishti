@@ -60,8 +60,11 @@ drishti-workbench/
 │   │   ├── services/   model_client.py    — engine-agnostic inference client
 │   │   │                router.py          — rule-based task classifier
 │   │   │                knowledge_base.py  — chunking, embedding, retrieval
+│   │   ├── core/       outbound.py — counts every attempted HTTP request
 │   │   ├── data/       sample_docs/ (committed), chroma/ (gitignored)
-│   │   └── scripts/    ingest_samples.py
+│   │   └── scripts/    ingest_samples.py, traffic_monitor.py
+├── scripts/            airgap_lockdown.sh, airgap_unlock.sh
+├── docs/               air_gap_proof.md
 │   │   └── routers/    one module per feature area; health.py, chat.py
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -256,6 +259,34 @@ The language clause is load-bearing. Qwen2.5 drifts into Chinese when a prompt
 does not establish a language — "Name two products made in an oil refinery"
 reliably came back in Chinese before this was added. A caller that supplies
 its own system message still wins, so the default only fills a gap.
+
+## Proving the air gap
+
+The claim is instrumented, not asserted. Three independent layers:
+
+1. **In-process counter** — `app/core/outbound.py` counts every HTTP request
+   the backend *attempts*, split into internal and external.
+   `GET /system/network-status` reports it, and the 🔒 badge in the UI polls
+   it every three seconds. The badge shows local calls too, because a counter
+   that only ever reads "0 external" is indistinguishable from a broken one.
+2. **Operating system** — `backend/scripts/traffic_monitor.py` reads the
+   kernel socket table via psutil, independently of the application.
+3. **Firewall** — `scripts/airgap_lockdown.sh` loads a pf ruleset that drops
+   all outbound traffic except loopback and private ranges.
+   `scripts/airgap_unlock.sh` reverses it.
+
+```bash
+sudo ./scripts/airgap_lockdown.sh --duration 600   # auto-unlocks after 10 min
+curl -m 5 https://google.com                       # fails
+# ... use the app normally; it keeps working ...
+sudo ./scripts/airgap_unlock.sh
+```
+
+**Always pass `--duration` when demoing.** The lockdown blocks the whole
+machine's internet, not just Drishti's.
+
+The full stage script, including the awkward questions and their answers, is
+in [docs/air_gap_proof.md](docs/air_gap_proof.md).
 
 ## Retrieval (RAG)
 
