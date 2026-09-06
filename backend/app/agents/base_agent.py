@@ -312,16 +312,35 @@ def _as_artifact(record: dict[str, str]) -> Artifact | None:
     )
 
 
+# Enough of the chunk to show which part of a document was used, without
+# reproducing the whole thing in the chat transcript.
+_EXCERPT_CHARS = 320
+
+
 def _unique_sources(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One entry per document, carrying its closest match."""
-    best: dict[str, float] = {}
+    """One entry per document, carrying its closest-matching chunk.
+
+    The excerpt and chunk index are included so a citation can be opened and
+    checked. "This came from the FCC SOP" is an assertion; showing the passage
+    it came from lets the reader verify it.
+    """
+    best: dict[str, dict[str, Any]] = {}
     for hit in hits:
         if not isinstance(hit, dict) or "source" not in hit:
             continue
         source = hit["source"]
-        distance = hit.get("distance", 1.0)
-        best[source] = min(best.get(source, distance), distance)
-    return [
-        {"source": source, "distance": round(distance, 4)}
-        for source, distance in sorted(best.items(), key=lambda kv: kv[1])
-    ]
+        distance = float(hit.get("distance", 1.0))
+        if source in best and best[source]["distance"] <= distance:
+            continue
+
+        text = " ".join(str(hit.get("text", "")).split())
+        excerpt = (
+            text if len(text) <= _EXCERPT_CHARS else text[:_EXCERPT_CHARS] + "…"
+        )
+        best[source] = {
+            "source": source,
+            "distance": round(distance, 4),
+            "chunk_index": hit.get("chunk_index", -1),
+            "excerpt": excerpt,
+        }
+    return sorted(best.values(), key=lambda entry: entry["distance"])
