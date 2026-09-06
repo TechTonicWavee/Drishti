@@ -33,12 +33,21 @@ type ToolCall = {
   ok: boolean
 }
 
+type ExecutionResult = {
+  code: string
+  stdout: string
+  stderr: string
+  exit_code: number
+  timed_out: boolean
+}
+
 type Message = {
   role: 'user' | 'assistant'
   content: string
   routing?: Routing
   sources?: Source[]
   tools?: ToolCall[]
+  executions?: ExecutionResult[]
 }
 
 export default function Chat() {
@@ -125,6 +134,18 @@ export default function Chat() {
           patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), call] }))
         } catch {
           // A missing tool line should not cost us the answer.
+        }
+      })
+
+      // Real sandbox output. Each attempt of a self-correction arrives as its
+      // own event and is rendered separately, so a failed first run stays
+      // visible instead of a retry looking like a first-time success.
+      source.addEventListener('execution', (e) => {
+        try {
+          const run = JSON.parse((e as MessageEvent<string>).data) as ExecutionResult
+          patchLast((m) => ({ ...m, executions: [...(m.executions ?? []), run] }))
+        } catch {
+          // Losing a result block should not cost us the answer.
         }
       })
 
@@ -218,6 +239,9 @@ export default function Chat() {
                 <span className="ml-0.5 inline-block animate-pulse">▍</span>
               )}
             </p>
+            {m.executions?.map((run, k) => (
+              <ExecutionBlock key={k} run={run} index={k} total={m.executions!.length} />
+            ))}
             {m.sources && m.sources.length > 0 && (
               <p className="text-[12px] text-muted-foreground">
                 Sources:{' '}
@@ -251,6 +275,63 @@ export default function Chat() {
         </button>
       </form>
     </section>
+  )
+}
+
+function ExecutionBlock({
+  run,
+  index,
+  total,
+}: {
+  run: ExecutionResult
+  index: number
+  total: number
+}) {
+  const failed = run.timed_out || run.exit_code !== 0
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/50 px-3 py-1.5">
+        <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          {total > 1 ? `Run ${index + 1} of ${total}` : 'Sandboxed run'}
+        </span>
+        <span
+          className={[
+            'text-[11px] font-medium',
+            failed ? 'text-destructive' : 'text-muted-foreground',
+          ].join(' ')}
+        >
+          {run.timed_out ? 'timed out' : `exit ${run.exit_code}`}
+        </span>
+      </div>
+
+      {/* Plain monospace rather than a syntax highlighter: every highlighter
+          worth using ships as a CDN script or a sizeable bundle, and this app
+          may not load anything over the network. */}
+      <pre className="overflow-x-auto px-3 py-2 font-mono text-[12px] leading-relaxed">
+        {run.code}
+      </pre>
+
+      <div className="border-t border-border bg-muted/25">
+        <div className="px-3 pt-1.5 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          Execution output
+        </div>
+        {run.stdout.trim() && (
+          <pre className="overflow-x-auto px-3 py-1.5 font-mono text-[12px] leading-relaxed">
+            {run.stdout.trimEnd()}
+          </pre>
+        )}
+        {run.stderr.trim() && (
+          <pre className="overflow-x-auto px-3 py-1.5 font-mono text-[12px] leading-relaxed text-destructive">
+            {run.stderr.trimEnd()}
+          </pre>
+        )}
+        {!run.stdout.trim() && !run.stderr.trim() && (
+          <p className="px-3 py-1.5 text-[12px] text-muted-foreground">
+            {run.timed_out ? 'Killed on timeout before producing output.' : 'No output.'}
+          </p>
+        )}
+      </div>
+    </div>
   )
 }
 
