@@ -40,7 +40,18 @@ class Settings(BaseSettings):
     embedding_model: str = "nomic-embed-text"
 
     # Vision model for scanned documents and photographs.
-    vision_model: str = "llava:7b"
+    #
+    # qwen2.5vl rather than llava. llava:7b was tried first and cannot read
+    # dense documents at all: given a synthetic inspection scan it invented a
+    # NASA equipment satisfaction report, and it hallucinated just as
+    # confidently on a cropped three-line strip, so it is not a resolution
+    # problem that preprocessing or tiling could fix. Its vision encoder is
+    # built for describing photographs, not for reading pages.
+    #
+    # qwen2.5vl:7b transcribes the same scan exactly — every equipment tag,
+    # measurement and line. On an inspection report a fluent invention is far
+    # worse than a refusal, so the model that reads is the one that ships.
+    vision_model: str = "qwen2.5vl:7b"
 
     # Vision runs a model over a rendered page image, which is slower than a
     # text turn — a cold llava load plus a full page can exceed the default.
