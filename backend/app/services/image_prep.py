@@ -142,16 +142,24 @@ def load_grayscale(path: str | Path) -> np.ndarray:
     return image
 
 
-def pdf_pages_to_grayscale(path: str | Path, max_pages: int) -> list[np.ndarray]:
-    """Render PDF pages to grayscale arrays.
+def pdf_pages_to_grayscale(
+    path: str | Path, max_pages: int
+) -> tuple[list[np.ndarray], int]:
+    """Render PDF pages to grayscale arrays, with the document's page count.
 
     Rendered at 200 dpi: enough for small print to survive, without producing
     images so large that the downscale step throws the detail away again.
+
+    The total is returned alongside so a caller can say when it only read part
+    of a document. Reading the first five pages of an eighty-page report and
+    reporting on them as though they were the whole thing is worse than
+    refusing — the answer looks complete and is not.
     """
     import pymupdf
 
     pages: list[np.ndarray] = []
     with pymupdf.open(str(path)) as document:
+        total = document.page_count
         for index, page in enumerate(document):
             if index >= max_pages:
                 break
@@ -160,4 +168,4 @@ def pdf_pages_to_grayscale(path: str | Path, max_pages: int) -> list[np.ndarray]
             pages.append(buffer.reshape(pixmap.height, pixmap.width))
     if not pages:
         raise ImagePrepError(f"No pages could be rendered from {path}")
-    return pages
+    return pages, total
