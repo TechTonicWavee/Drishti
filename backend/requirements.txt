@@ -10,3 +10,11 @@ uvicorn[standard]==0.52.4
 httpx==0.28.1
 pydantic==2.13.5
 pydantic-settings==2.15.0
+
+# Local RAG. ChromaDB runs embedded (in-process), so there is no vector-store
+# server to deploy and nothing listening on a port. Its telemetry is switched
+# off explicitly in app/services/knowledge_base.py, and its bundled default
+# embedding function is never used — that one downloads an ONNX model from the
+# internet on first call, which would break the air gap.
+chromadb==1.5.9
+pypdf==6.17.0
