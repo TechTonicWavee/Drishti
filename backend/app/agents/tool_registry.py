@@ -343,3 +343,230 @@ register(
         sensitive_args=frozenset({"code"}),
     )
 )
+
+
+# --- Deliverable generation -------------------------------------------------
+
+
+def _record_artifact(context: dict[str, Any], kind: str, path: str) -> str:
+    """Note a generated file on the shared artifact list, and return its path."""
+    artifacts = context.get("artifacts")
+    if isinstance(artifacts, list):
+        artifacts.append({"kind": kind, "path": path})
+    return path
+
+
+async def _generate_approval_note(
+    *, context: dict[str, Any], findings: list[str], title: str,
+    source_document: str = "the conversation",
+) -> str:
+    from app.services.document_generator import generate_approval_note
+
+    # Writing a file is blocking; a thread keeps the event loop free.
+    path = await asyncio.to_thread(
+        generate_approval_note, list(findings), title, source_document
+    )
+    return _record_artifact(context, "approval_note", path)
+
+
+async def _generate_summary_deck(
+    *, context: dict[str, Any], title: str, sections: list[dict[str, Any]]
+) -> str:
+    from app.services.document_generator import generate_summary_deck
+
+    path = await asyncio.to_thread(generate_summary_deck, title, list(sections))
+    return _record_artifact(context, "summary_deck", path)
+
+
+async def _generate_calculation_sheet(
+    *, context: dict[str, Any], title: str, steps: list[dict[str, Any]]
+) -> str:
+    from app.services.document_generator import generate_calculation_sheet
+
+    path = await asyncio.to_thread(generate_calculation_sheet, title, list(steps))
+    return _record_artifact(context, "calculation_sheet", path)
+
+
+def _summarize_file(result: Any) -> str:
+    from pathlib import Path
+
+    if not isinstance(result, str) or not result:
+        return "no file produced"
+    path = Path(result)
+    if not path.is_file():
+        return f"{path.name} (missing on disk)"
+    return f"{path.name}, {path.stat().st_size} bytes"
+
+
+register(
+    Tool(
+        name="generate_approval_note",
+        description=(
+            "Create a Word (.docx) approval note listing findings, with a "
+            "signature block for a human to sign. Use this when the user asks "
+            "for an approval note, sign-off sheet or inspection note."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Document title."},
+                "findings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "One finding per entry, written out in full.",
+                },
+                "source_document": {
+                    "type": "string",
+                    "description": "What the findings came from, e.g. a scan filename.",
+                },
+            },
+            "required": ["title", "findings"],
+        },
+        func=_generate_approval_note,
+        summarize=_summarize_file,
+    )
+)
+
+register(
+    Tool(
+        name="generate_summary_deck",
+        description=(
+            "Create a PowerPoint (.pptx) summary deck with a title slide and "
+            "one slide per section. Use this when the user asks for slides, a "
+            "deck, or a presentation."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Deck title."},
+                "sections": {
+                    "type": "array",
+                    "description": "One entry per slide.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "heading": {"type": "string"},
+                            "bullets": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["heading", "bullets"],
+                    },
+                },
+            },
+            "required": ["title", "sections"],
+        },
+        func=_generate_summary_deck,
+        summarize=_summarize_file,
+    )
+)
+
+register(
+    Tool(
+        name="generate_calculation_sheet",
+        description=(
+            "Create an Excel (.xlsx) calculation sheet with one row per step, "
+            "showing description, formula or input, and result. Use this when "
+            "the user asks for a calculation, a workbook or a spreadsheet. "
+            "Include every intermediate step, not just the final number."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Sheet title."},
+                "steps": {
+                    "type": "array",
+                    "description": "One entry per calculation step, in order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step": {"type": "string"},
+                            "description": {"type": "string"},
+                            "formula": {"type": "string"},
+                            "result": {"type": "string"},
+                        },
+                        "required": ["description", "result"],
+                    },
+                },
+            },
+            "required": ["title", "steps"],
+        },
+        func=_generate_calculation_sheet,
+        summarize=_summarize_file,
+    )
+)
+
+
+async def _ask_document_agent(*, context: dict[str, Any], request: str) -> str:
+    """Hand a deliverable request to the Document Agent and return its reply."""
+    from app.agents.document_agent import DocumentAgent
+
+    asker = context.get("agent", "unknown")
+    depth = context.get("delegation_depth", 0)
+
+    if depth >= MAX_DELEGATION_DEPTH:
+        delegation_log.warning(
+            'from=%s | to=Document Agent | REFUSED (depth %s) | request="%s"',
+            asker, depth, _preview(request),
+        )
+        raise ToolError("Delegation depth exceeded; answer directly instead.")
+
+    client = context.get("client")
+    if client is None:
+        raise ToolError("No model client available for delegation.")
+
+    # Findings travel through the context rather than through the model's
+    # arguments. Making the caller retype a page of extracted text into a tool
+    # call is how details get dropped or quietly reworded.
+    brief = request.strip()
+    findings = context.get("findings")
+    if findings:
+        source = context.get("source_document") or context.get("attachment_name") or "the source document"
+        listed = "\n".join(f"- {f}" for f in findings)
+        brief = f"{brief}\n\nFindings extracted from {source}:\n{listed}"
+
+    delegation_log.info(
+        'from=%s | to=Document Agent | ASKED | request="%s" | findings=%d',
+        asker, _preview(request), len(findings or []),
+    )
+
+    agent = DocumentAgent(client)
+    answer = await agent.run(
+        brief,
+        {**context, "delegation_depth": depth + 1, "delegated_from": asker},
+    )
+
+    delegation_log.info(
+        'from=%s | to=Document Agent | ANSWERED | %d chars', asker, len(answer)
+    )
+    return answer
+
+
+register(
+    Tool(
+        name="ask_document_agent",
+        description=(
+            "Delegate to the document specialist to produce a real "
+            "downloadable file — a Word approval note, a PowerPoint deck or an "
+            "Excel calculation sheet. Use this whenever the user asks for a "
+            "document, note, report, deck, slides or spreadsheet to be drafted "
+            "or generated. State what is wanted; extracted findings are passed "
+            "along automatically."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": (
+                        "What deliverable is wanted and what it should cover."
+                    ),
+                }
+            },
+            "required": ["request"],
+        },
+        func=_ask_document_agent,
+        summarize=lambda r: f"delegated; {len(r)} char reply",
+    )
+)
