@@ -22,3 +22,7 @@ pypdf==6.17.0
 # Used only by scripts/traffic_monitor.py, the demo-time verification tool.
 # The application itself never imports it.
 psutil==7.2.2
+
+# Drives the code-execution sandbox. Talks to the local Docker daemon over its
+# unix socket — not a network dependency.
+docker==7.2.0

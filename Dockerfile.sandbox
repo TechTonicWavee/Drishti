@@ -1,0 +1,31 @@
+# Drishti Workbench — code execution sandbox.
+#
+# Deliberately minimal. This image runs code written by a language model, so
+# every package present is a package that code could reach for. Nothing is
+# installed beyond the base image: no pip packages, no curl, no compilers.
+#
+# The security properties that matter are applied at *run* time, not here —
+# no network, dropped capabilities, read-only root, pid and memory caps — and
+# are set in app/services/sandbox.py. An image cannot enforce its own
+# isolation; see that module for the flags.
+#
+# Build:
+#   docker build -f Dockerfile.sandbox -t drishti-sandbox:latest .
+
+FROM python:3.12-slim
+
+# No bytecode written (the root filesystem is read-only at run time anyway),
+# unbuffered output so partial output survives a container kill on timeout,
+# and HOME pointed at the writable tmpfs so anything expecting a home
+# directory finds one.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp
+
+# Run as nobody. Combined with --cap-drop ALL and --no-new-privileges at run
+# time, code in here has no route to root even if it escapes the interpreter.
+USER 65534:65534
+
+WORKDIR /tmp
+
+CMD ["python3", "-c", "print('drishti sandbox ready')"]
