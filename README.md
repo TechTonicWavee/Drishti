@@ -41,6 +41,51 @@ together with an Ollama service for local inference.
 
 Built for **Smart India Hackathon**.
 
+## What is built
+
+Everything below runs locally, today, and is verified rather than asserted.
+
+| Capability | Status |
+| --- | --- |
+| Engine-agnostic model client (OpenAI-compatible; Ollama today, vLLM later) | ✅ |
+| Rule-based task router — reasoning / coding / vision, with an audit log | ✅ |
+| Local RAG over plant documents (ChromaDB + `nomic-embed-text`), with citations | ✅ |
+| Agent framework: whitelisted tools, one registry, delegation between agents | ✅ |
+| Sandboxed code execution (Docker, no network, verified) | ✅ |
+| Vision extraction from scanned pages and PDFs (OpenCV + `qwen2.5vl`) | ✅ |
+| Real deliverables — `.docx`, `.pptx`, `.xlsx` — with download | ✅ |
+| Network-isolation proof: in-process counter, OS socket monitor, pf firewall | ✅ |
+| Agent trace in the UI, read back from the audit logs | ✅ |
+
+Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
+`qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
+
+## Roadmap — not yet built
+
+Listed so nobody mistakes an intention for a feature. **None of this exists in
+the repository today.**
+
+- **vLLM in production.** The client already speaks the protocol both engines
+  implement and names neither, so this is expected to be a change to
+  `MODEL_SERVER_URL` — but it has never been run against vLLM, and that claim
+  is untested.
+- **Authentication and RBAC.** There is no login, no user model and no
+  per-role permissions. Anyone who can reach the port can use everything.
+  A plant deployment needs this before it touches real data.
+- **Hardware tiers.** Model choice is currently one setting for one machine.
+  A real rollout wants a small tier for a laptop and a larger tier for the
+  GPU server, selected by profile.
+- **Concurrency.** The agent trace correlates by time window because the logs
+  carry no request id; under simultaneous users a trace would collect its
+  neighbours' steps. Threading a request id through every log line fixes it.
+- **Vision beyond one page at a time.** PDFs are capped at five pages, and
+  each page is an independent call with no cross-page reasoning.
+- **Human-in-the-loop approval.** Generated documents carry a signature block,
+  but nothing tracks whether anyone signed. There is no workflow state.
+- **Retention and deletion policy.** Uploads are swept after an hour and
+  generated files are kept indefinitely. A real deployment needs a stated
+  policy, not a default.
+
 ## Why air-gapped
 
 Refinery process data — sensor histories, incident reports, maintenance logs,
@@ -82,6 +127,50 @@ drishti-workbench/
 ├── .env.example
 └── README.md
 ```
+
+## Running the demo from a clean machine
+
+The full sequence, assuming only Docker, Python 3.11+, Node 20+ and Ollama.
+This is the only part that needs the internet.
+
+```bash
+git clone <this repo> && cd Drishti
+
+# 1. Models (~16 GB total, once)
+ollama pull qwen2.5:7b
+ollama pull qwen2.5-coder:7b
+ollama pull qwen2.5vl:7b
+ollama pull nomic-embed-text
+
+# 2. Backend
+cd backend
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# 3. Vector store from the sample SOPs
+.venv/bin/python scripts/ingest_samples.py          # → 6 chunks
+
+# 4. Sandbox image
+cd .. && docker build -f Dockerfile.sandbox -t drishti-sandbox:latest .
+
+# 5. Frontend
+cd frontend && npm ci
+```
+
+Then, in three terminals:
+
+```bash
+cd backend  && .venv/bin/python -m uvicorn app.main:app --port 8000
+cd frontend && npm run dev
+cd backend  && .venv/bin/python scripts/traffic_monitor.py   # keep visible
+```
+
+Open <http://localhost:5173>. **From here on, nothing needs the internet** —
+see [docs/air_gap_proof.md](docs/air_gap_proof.md) to prove it, and
+[docs/demo_script.md](docs/demo_script.md) for the three flows to walk
+through, with expected routing and timings.
+
+Regenerate the synthetic scanned samples at any time with
+`.venv/bin/python scripts/make_scanned_samples.py`.
 
 ## Running it
 
