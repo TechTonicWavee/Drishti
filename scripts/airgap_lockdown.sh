@@ -43,6 +43,19 @@ if [[ "$(id -u)" -ne 0 ]]; then
     exit 1
 fi
 
+# Cancel any auto-unlock left over from a previous run. Without this, an
+# earlier --duration timer keeps counting and will lift the lockdown partway
+# through this one — silently, and most likely mid-demo.
+if [[ -f "$STATE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$STATE_FILE"
+    if [[ -n "${unlock_pid:-}" ]] && kill -0 "$unlock_pid" 2>/dev/null; then
+        kill "$unlock_pid" 2>/dev/null && \
+            echo "Cancelled a pending auto-unlock from an earlier run (pid $unlock_pid)."
+    fi
+    unset unlock_pid
+fi
+
 # Remember whether pf was already enabled, so the unlock script restores the
 # machine to the state it was actually in rather than a guess at it.
 if pfctl -s info 2>/dev/null | head -1 | grep -q "Enabled"; then
@@ -123,6 +136,9 @@ if [[ -n "$DURATION" ]]; then
     # switch: even if the terminal is closed or the demo machine is left
     # alone, connectivity comes back on its own.
     nohup bash -c "sleep $DURATION; '$UNLOCK'" >/dev/null 2>&1 &
+    # Recorded so an early manual unlock can cancel it, and so the next
+    # lockdown does not inherit it.
+    echo "unlock_pid=$!" >> "$STATE_FILE"
     echo
     echo "   ⏱  Auto-unlock scheduled in ${DURATION}s (pid $!)"
 fi

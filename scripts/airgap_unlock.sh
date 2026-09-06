@@ -32,6 +32,16 @@ PF_WAS_ENABLED=0
 # shellcheck disable=SC1090
 [[ -f "$STATE_FILE" ]] && source "$STATE_FILE"
 
+# Cancel a pending auto-unlock, so an unlock done early does not leave a timer
+# counting down to fire again later — which would lift a second lockdown
+# without warning. $PPID guard: when the timer itself invokes this script, the
+# process to kill is our own parent, and killing it would end this run.
+if [[ -n "${unlock_pid:-}" ]] && [[ "${unlock_pid}" != "$PPID" ]] \
+   && kill -0 "${unlock_pid}" 2>/dev/null; then
+    kill "${unlock_pid}" 2>/dev/null && \
+        echo "Cancelled the pending auto-unlock (pid ${unlock_pid})."
+fi
+
 if [[ "${pf_was_enabled:-0}" -eq 1 ]]; then
     pfctl -e 2>&1 | grep -v "^No ALTQ support" || true
     echo "pf left enabled with the system ruleset (it was enabled beforehand)."
