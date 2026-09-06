@@ -1,0 +1,12 @@
+# Drishti Workbench — backend dependencies
+#
+# AIR-GAPPED CONSTRAINT: this file must never contain a cloud LLM client.
+# Banned forever: openai, anthropic, google-generativeai, google-genai,
+# cohere, mistralai, litellm, langchain-openai, boto3(bedrock), replicate.
+# All model inference goes through a locally-running Ollama over plain HTTP.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+httpx==0.28.1
+pydantic==2.13.5
+pydantic-settings==2.15.0

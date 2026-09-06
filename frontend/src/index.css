@@ -1,0 +1,182 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "./assets/fonts/fonts.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * Drishti Workbench — warm editorial theme.
+ *
+ * Calm, paper-like, generous. Cream ground, warm off-black ink, a single rust
+ * accent used sparingly so it still means something when it appears. Colours
+ * are plain hex on purpose: they are the values in the design brief, so they
+ * stay greppable rather than being buried in a converted colour space.
+ * ------------------------------------------------------------------------- */
+
+@theme inline {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-heading: 'Source Serif 4', ui-serif, Georgia, Cambria, serif;
+    --font-serif: 'Source Serif 4', ui-serif, Georgia, Cambria, serif;
+
+    /* Brand rust, exposed as its own utility (bg-brand / text-brand) so it can
+     * be reached without going through shadcn's --primary slot. */
+    --color-brand: var(--brand);
+    --color-brand-foreground: var(--brand-foreground);
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    --radius: 0.875rem;
+
+    --background: #f5f3ee;   /* warm cream paper */
+    --foreground: #2b2725;   /* warm off-black ink */
+
+    --brand: #c15f3c;        /* muted rust / terracotta */
+    --brand-foreground: #fdfbf7;
+
+    --card: #fbfaf7;
+    --card-foreground: #2b2725;
+    --popover: #fbfaf7;
+    --popover-foreground: #2b2725;
+
+    --primary: #c15f3c;
+    --primary-foreground: #fdfbf7;
+    --secondary: #eae5db;
+    --secondary-foreground: #2b2725;
+
+    --muted: #ece8df;
+    --muted-foreground: #6f665e;
+
+    /* shadcn's --accent is a hover/active surface, not the brand colour. */
+    --accent: #eee7dd;
+    --accent-foreground: #2b2725;
+
+    --destructive: #9e2f1e;
+
+    --border: #e2dccf;
+    --input: #e2dccf;
+    --ring: #c15f3c;
+
+    --chart-1: #c15f3c;
+    --chart-2: #9a7b52;
+    --chart-3: #6f8b7d;
+    --chart-4: #b08968;
+    --chart-5: #6f665e;
+
+    --sidebar: #f1eee7;
+    --sidebar-foreground: #2b2725;
+    --sidebar-primary: #c15f3c;
+    --sidebar-primary-foreground: #fdfbf7;
+    --sidebar-accent: #eae5db;
+    --sidebar-accent-foreground: #2b2725;
+    --sidebar-border: #e2dccf;
+    --sidebar-ring: #c15f3c;
+}
+
+/* Nothing in the app toggles this yet. It exists so that if a dark mode is
+ * added later it inherits the same warm character instead of the default
+ * cold grey. */
+.dark {
+    --background: #1c1917;
+    --foreground: #f0ece4;
+
+    --brand: #d47a56;
+    --brand-foreground: #1c1917;
+
+    --card: #262220;
+    --card-foreground: #f0ece4;
+    --popover: #262220;
+    --popover-foreground: #f0ece4;
+
+    --primary: #d47a56;
+    --primary-foreground: #1c1917;
+    --secondary: #332e2b;
+    --secondary-foreground: #f0ece4;
+
+    --muted: #332e2b;
+    --muted-foreground: #a89e94;
+
+    --accent: #3a3431;
+    --accent-foreground: #f0ece4;
+
+    --destructive: #d4674f;
+
+    --border: #ffffff1a;
+    --input: #ffffff26;
+    --ring: #d47a56;
+
+    --chart-1: #d47a56;
+    --chart-2: #b99a6f;
+    --chart-3: #8aa79a;
+    --chart-4: #c9a081;
+    --chart-5: #a89e94;
+
+    --sidebar: #232019;
+    --sidebar-foreground: #f0ece4;
+    --sidebar-primary: #d47a56;
+    --sidebar-primary-foreground: #1c1917;
+    --sidebar-accent: #332e2b;
+    --sidebar-accent-foreground: #f0ece4;
+    --sidebar-border: #ffffff1a;
+    --sidebar-ring: #d47a56;
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+
+    html {
+        @apply font-sans antialiased;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+
+    body {
+        @apply bg-background text-foreground;
+    }
+
+    h1, h2, h3, h4 {
+        @apply font-heading tracking-tight;
+        font-variation-settings: 'opsz' 32;
+    }
+}

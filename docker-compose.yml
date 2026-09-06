@@ -1,0 +1,55 @@
+# Drishti Workbench — local stack.
+#
+# Three services, no external dependencies at run time. Images are pulled once
+# during setup; after that the whole stack runs on an isolated network.
+#
+# NOTE: no service here is given an API key, and none should ever be. All model
+# inference goes to the `ollama` service on the internal Docker network.
+
+services:
+  backend:
+    build: ./backend
+    container_name: drishti-backend
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      # Container-to-container address; overrides the localhost default in
+      # backend/app/core/config.py.
+      OLLAMA_HOST: http://ollama:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      # Source mount so --reload picks up host edits.
+      - ./backend/app:/app/app
+    depends_on:
+      - ollama
+
+  frontend:
+    build: ./frontend
+    container_name: drishti-frontend
+    environment:
+      # Read by vite.config.ts to target the dev-server proxy at the backend.
+      BACKEND_ORIGIN: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume keeps the image's node_modules from being shadowed by
+      # the host mount above (host and container may need different binaries).
+      - /app/node_modules
+    depends_on:
+      - backend
+
+  ollama:
+    image: ollama/ollama
+    container_name: drishti-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Downloaded models persist here. Pull models deliberately, e.g.
+      #   docker compose exec ollama ollama pull llama3.1:8b
+      # No model is pulled automatically — that would need internet at start-up.
+      - ollama-models:/root/.ollama
+
+volumes:
+  ollama-models:
