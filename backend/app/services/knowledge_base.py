@@ -49,7 +49,14 @@ _COLLECTION_NAME: Final = "drishti_documents"
 CHUNK_WORDS: Final = 375
 OVERLAP_WORDS: Final = 60
 
-_SUPPORTED_SUFFIXES: Final = frozenset({".txt", ".pdf"})
+# Markdown is read as plain text; it needs no separate handling, and refusing
+# it would be arbitrary when .txt is accepted.
+_SUPPORTED_SUFFIXES: Final = frozenset({".txt", ".pdf", ".md"})
+
+# Documents added through the UI live alongside the bundled samples, so one
+# directory is the whole corpus and scripts/ingest_samples.py rebuilds all of
+# it after the store is deleted.
+LIBRARY_PATH: Final = SAMPLE_DOCS_PATH
 
 _client: chromadb.ClientAPI | None = None
 _owned_model_client: ModelServingClient | None = None
@@ -231,3 +238,57 @@ async def search(
 def document_count() -> int:
     """Number of stored chunks. Useful for scripts and health checks."""
     return _collection().count()
+
+
+def list_documents() -> list[dict[str, Any]]:
+    """Every indexed document, with how many chunks each contributed.
+
+    Read from the store rather than the directory: what matters is what is
+    actually searchable, and a file sitting on disk unindexed would otherwise
+    look available when it is not.
+    """
+    collection = _collection()
+    if collection.count() == 0:
+        return []
+
+    stored = collection.get(include=["metadatas"])
+    counts: dict[str, int] = {}
+    for metadata in stored.get("metadatas") or []:
+        source = (metadata or {}).get("source")
+        if source:
+            counts[source] = counts.get(source, 0) + 1
+
+    return [
+        {
+            "source": source,
+            "chunks": count,
+            # Whether the original file is still on disk. A document can be
+            # indexed but have had its source removed, and the UI should not
+            # imply the file is there to open.
+            "on_disk": (LIBRARY_PATH / source).is_file(),
+        }
+        for source, count in sorted(counts.items())
+    ]
+
+
+def remove_document(source: str) -> int:
+    """Drop a document from the index and delete its file. Returns chunks removed.
+
+    The filename is treated as hostile: only its basename is used, and the
+    resolved path must still sit inside the library directory.
+    """
+    name = Path(source).name
+    if not name or name != source:
+        raise ValueError("Invalid document name.")
+
+    collection = _collection()
+    existing = collection.get(where={"source": name}, include=[])
+    removed = len(existing.get("ids") or [])
+    if removed:
+        collection.delete(where={"source": name})
+
+    path = (LIBRARY_PATH / name).resolve()
+    if path.is_relative_to(LIBRARY_PATH.resolve()) and path.is_file():
+        path.unlink()
+
+    return removed
