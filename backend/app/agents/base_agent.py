@@ -154,6 +154,13 @@ class Agent:
         # Tools receive the shared client and the calling agent's name, which
         # is what makes delegation and its logging possible.
         tool_context = {**context, "client": self.client, "agent": self.name}
+        # Shared, mutable, and passed by reference into every tool and every
+        # delegated sub-agent. A generator tool appends here, so a file
+        # produced two levels down — vision hands off to document, which calls
+        # a generator — still surfaces as a download on this turn. Returning
+        # the path through the tool result alone would lose it, because
+        # delegation collects only the sub-agent's text.
+        tool_context.setdefault("artifacts", [])
         specs = tool_registry.specs(self.allowed_tools)
 
         for _ in range(self.max_tool_rounds):
@@ -251,10 +258,9 @@ class Agent:
         # the real output rather than only the model's account of it. Both
         # attempts of a self-correction surface, which is the point: a silent
         # first failure would make a retry look like a first success.
-        # A generator tool returns a path on disk. Surface it as a downloadable
-        # artifact so the UI can offer the file rather than describing it.
-        if name in _DOCUMENT_TOOLS and isinstance(result, str) and result:
-            artifact = _as_artifact(name, result)
+        # Anything the call produced, however deep, is drained here.
+        for record in _drain_artifacts(tool_context):
+            artifact = _as_artifact(record)
             if artifact is not None:
                 yield artifact
 
@@ -284,19 +290,28 @@ class Agent:
         return json.dumps(result, default=str, indent=2)
 
 
-_DOCUMENT_TOOLS = frozenset(
-    {"generate_approval_note", "generate_summary_deck", "generate_calculation_sheet"}
-)
+def _drain_artifacts(tool_context: dict[str, Any]) -> list[dict[str, str]]:
+    """Take everything recorded so far, leaving the list empty.
+
+    Draining rather than reading means each artifact is emitted once, on the
+    call that produced it, however many tool calls follow.
+    """
+    recorded = tool_context.get("artifacts")
+    if not isinstance(recorded, list) or not recorded:
+        return []
+    drained = list(recorded)
+    recorded.clear()
+    return drained
 
 
-def _as_artifact(tool_name: str, path_str: str) -> Artifact | None:
+def _as_artifact(record: dict[str, str]) -> Artifact | None:
     """Describe a generated file for the UI, or None if it is not on disk."""
-    path = Path(path_str)
+    path = Path(record.get("path", ""))
     if not path.is_file():
         return None
     return Artifact(
         filename=path.name,
-        kind=tool_name.removeprefix("generate_"),
+        kind=record.get("kind", "document"),
         # Relative so the browser stays same-origin; the dev server proxies it.
         url=f"/api/files/{path.name}",
         size_bytes=path.stat().st_size,
