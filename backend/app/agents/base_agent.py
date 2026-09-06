@@ -163,6 +163,13 @@ class Agent:
         tool_context.setdefault("artifacts", [])
         specs = tool_registry.specs(self.allowed_tools)
 
+        # How many artifacts this loop has already emitted. An index, not a
+        # drain: the list is shared by reference with every delegated
+        # sub-agent, and a sub-agent that emptied it would leave its caller
+        # nothing to report — the file would exist on disk and never be
+        # offered. Each level keeps its own count and emits what is new to it.
+        emitted = 0
+
         for _ in range(self.max_tool_rounds):
             calls: list[dict[str, Any]] = []
             try:
@@ -203,6 +210,13 @@ class Agent:
             for call in calls:
                 async for event in self._invoke(call, tool_context, conversation):
                     yield event
+
+                recorded = tool_context.get("artifacts") or []
+                while emitted < len(recorded):
+                    artifact = _as_artifact(recorded[emitted])
+                    emitted += 1
+                    if artifact is not None:
+                        yield artifact
 
         # Ran out of rounds with tools still being requested. Ask once more
         # without tools so the turn ends with an answer rather than silence.
@@ -258,12 +272,6 @@ class Agent:
         # the real output rather than only the model's account of it. Both
         # attempts of a self-correction surface, which is the point: a silent
         # first failure would make a retry look like a first success.
-        # Anything the call produced, however deep, is drained here.
-        for record in _drain_artifacts(tool_context):
-            artifact = _as_artifact(record)
-            if artifact is not None:
-                yield artifact
-
         if name == "execute_code" and isinstance(result, dict):
             yield Execution(
                 code=arguments.get("code", ""),
@@ -288,20 +296,6 @@ class Agent:
         if isinstance(result, str):
             return result
         return json.dumps(result, default=str, indent=2)
-
-
-def _drain_artifacts(tool_context: dict[str, Any]) -> list[dict[str, str]]:
-    """Take everything recorded so far, leaving the list empty.
-
-    Draining rather than reading means each artifact is emitted once, on the
-    call that produced it, however many tool calls follow.
-    """
-    recorded = tool_context.get("artifacts")
-    if not isinstance(recorded, list) or not recorded:
-        return []
-    drained = list(recorded)
-    recorded.clear()
-    return drained
 
 
 def _as_artifact(record: dict[str, str]) -> Artifact | None:
