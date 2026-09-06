@@ -22,6 +22,7 @@ class ReasoningAgent(Agent):
     allowed_tools: ClassVar[list[str]] = [
         "search_knowledge_base",
         "ask_coder_agent",
+        "ask_document_agent",
     ]
     instructions: ClassVar[str] = (
         "You are the reasoning specialist for MRPL refinery staff.\n"
@@ -38,6 +39,11 @@ class ReasoningAgent(Agent):
         "self-contained description of just the coding part, then present "
         "what it returns alongside your own answer. This applies even when "
         "the code looks trivial to you.\n"
+        "- When the user wants a real deliverable — an approval note, a "
+        "report, a deck, slides, a spreadsheet, anything they would download "
+        "or sign — call ask_document_agent. Do not write the document out in "
+        "chat instead: they need a file, and prose in a chat window is not "
+        "one.\n"
         "- After a tool returns, check whether any part of the original "
         "request is still unanswered before you reply. If a coding task is "
         "still outstanding, call ask_coder_agent now — finishing the document "
