@@ -22,7 +22,7 @@ PDF_SUFFIXES = frozenset({".pdf"})
 # llava:7b follows a simple sectioned format far more reliably than it follows
 # a request for JSON, so the contract is plain text with two headed sections
 # and the parsing is done here.
-_EXTRACTION_PROMPT = """You are reading a scanned engineering inspection document from an oil refinery.
+_EXTRACTION_PROMPT = """You are reading one page of a scanned document from an oil refinery. It may be an inspection note, a procedure, an audit report, a form or a cover page.
 
 Reply in exactly this format, with both headings:
 
@@ -30,13 +30,17 @@ RAW TEXT:
 <transcribe every line of text you can read on the page, preserving order>
 
 FINDINGS:
-- <one discrete observation, defect or measurement per line>
-- <another>
+- <one substantive observation per line>
 
-Rules:
-- A finding is a specific observation: a defect, a measurement, a condition, or a recommended action. Include the equipment tag and any numbers exactly as printed.
-- Do not invent findings. If the page shows only three observations, list three.
-- If the page is unreadable, write UNREADABLE under both headings."""
+What counts as a finding:
+- Something the page states about the plant, its equipment or its operation: a defect, a measurement, a limit, a requirement, a conclusion or a recommended action. Include equipment tags and numbers exactly as printed.
+
+What does NOT count as a finding:
+- Anything about the document itself. "This is a report by the Comptroller and Auditor General", "the document has an emblem", "no findings are listed on this page" are descriptions of the page, not findings from it.
+- If the page is a cover, a contents page, a signature page or otherwise carries no substantive content, write exactly NONE under FINDINGS and nothing else there. That is a correct answer, not a failure.
+
+Do not invent findings. If the page shows three observations, list three.
+If the page is unreadable, write UNREADABLE under both headings."""
 
 
 class VisionAgent(Agent):
@@ -92,9 +96,11 @@ class VisionAgent(Agent):
         suffix = path.suffix.lower()
 
         if suffix in PDF_SUFFIXES:
-            pages = image_prep.pdf_pages_to_grayscale(path, settings.vision_max_pages)
+            pages, total_pages = image_prep.pdf_pages_to_grayscale(
+                path, settings.vision_max_pages
+            )
         elif suffix in IMAGE_SUFFIXES:
-            pages = [image_prep.load_grayscale(path)]
+            pages, total_pages = [image_prep.load_grayscale(path)], 1
         else:
             raise ImagePrepError(
                 f"Unsupported file type '{suffix}'. "
@@ -128,14 +134,16 @@ class VisionAgent(Agent):
             "raw_text": "\n\n".join(t for t in texts if t).strip(),
             "findings": findings,
             "source_file": path.name,
+            "pages_read": len(pages),
+            "total_pages": total_pages,
         }
 
         # Metadata only — the extracted text belongs in the response, not in a
         # log file accumulating the contents of everything ever uploaded.
         log.info(
-            "source=%s | pages=%d | findings=%d | raw_text_chars=%d | deskew=%s",
-            path.name, len(pages), len(findings), len(result["raw_text"]),
-            [n["deskew_degrees"] for n in prep_notes],
+            "source=%s | pages=%d/%d | findings=%d | raw_text_chars=%d | deskew=%s",
+            path.name, len(pages), total_pages, len(findings),
+            len(result["raw_text"]), [n["deskew_degrees"] for n in prep_notes],
         )
         return result
 
@@ -230,13 +238,13 @@ def _parse_reply(content: str) -> tuple[str, list[str]]:
     findings: list[str] = []
     for line in tail.splitlines():
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.upper() in {"NONE", "UNREADABLE"}:
             continue
         # Bulleted or numbered lines only; prose between them is commentary.
         bullet = re.match(r"^(?:[-*•]|\d+[.)])\s+(.*)$", stripped)
         if bullet:
             text = bullet.group(1).strip()
-            if text and text.upper() != "UNREADABLE":
+            if text and text.upper() not in {"UNREADABLE", "NONE"}:
                 findings.append(text)
 
     # Deduplicate while preserving order: a page repeated across the raw-text
@@ -255,11 +263,35 @@ def _parse_reply(content: str) -> tuple[str, list[str]]:
 def _format(result: dict[str, Any], question: str) -> list[str]:
     """Render the extraction for the chat stream."""
     findings = result["findings"]
+    read = int(result.get("pages_read", 1))
+    total = int(result.get("total_pages", 1))
+
     parts = [f"**Read `{result['source_file']}`**\n\n"]
+
+    if total > 1:
+        # Say how much of the document was actually looked at. Answering from
+        # the first few pages of a long report without saying so produces an
+        # answer that looks complete and is not.
+        scope = (
+            f"Pages 1–{read} of {total}."
+            if read < total
+            else f"All {total} pages."
+        )
+        if read < total:
+            scope += (
+                f" Only the first {read} are processed per upload; raise "
+                f"`vision_max_pages` to read further."
+            )
+        parts.append(f"_{scope}_\n\n")
 
     if findings:
         parts.append(f"**Findings ({len(findings)})**\n\n")
         parts.extend(f"{i}. {f}\n" for i, f in enumerate(findings, start=1))
+    elif read < total:
+        parts.append(
+            "No substantive findings on the pages read — they appear to be "
+            "front matter rather than content.\n"
+        )
     else:
         parts.append(
             "No discrete findings could be identified on this page.\n"
