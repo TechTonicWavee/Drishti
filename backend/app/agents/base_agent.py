@@ -47,13 +47,24 @@ class ToolUse:
 
 
 @dataclass(frozen=True)
+class Execution:
+    """Code was run in the sandbox. Carries the code and what it produced."""
+
+    code: str
+    stdout: str
+    stderr: str
+    exit_code: int
+    timed_out: bool
+
+
+@dataclass(frozen=True)
 class Sources:
     """Documents the answer is grounded in."""
 
     sources: list[dict[str, Any]] = field(default_factory=list)
 
 
-AgentEvent = Delta | ToolUse | Sources
+AgentEvent = Delta | ToolUse | Sources | Execution
 
 
 class Agent:
@@ -199,6 +210,19 @@ class Agent:
         # Retrieval results also drive the Sources line in the UI.
         if name == "search_knowledge_base" and isinstance(result, list):
             yield Sources(_unique_sources(result))
+
+        # Execution results are rendered as their own block, so the user sees
+        # the real output rather than only the model's account of it. Both
+        # attempts of a self-correction surface, which is the point: a silent
+        # first failure would make a retry look like a first success.
+        if name == "execute_code" and isinstance(result, dict):
+            yield Execution(
+                code=arguments.get("code", ""),
+                stdout=result.get("stdout", ""),
+                stderr=result.get("stderr", ""),
+                exit_code=int(result.get("exit_code", -1)),
+                timed_out=bool(result.get("timed_out", False)),
+            )
 
         conversation.append(self._tool_reply(call, self.render_result(name, result)))
 
