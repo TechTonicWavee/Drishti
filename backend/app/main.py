@@ -20,7 +20,14 @@ async def lifespan(app: FastAPI):
     # One client, one connection pool, for the life of the process.
     app.state.model_client = ModelServingClient(
         settings.model_server_url,
-        timeout=settings.model_request_timeout_seconds,
+        # The longest operation sets the ceiling. A vision turn renders and
+        # reads a full page and takes far longer than a text turn; httpx
+        # applies this as a read timeout, so a generous value costs a short
+        # call nothing — the 10s connect timeout still catches a dead server.
+        timeout=max(
+            settings.model_request_timeout_seconds,
+            settings.vision_request_timeout_seconds,
+        ),
         system_prompt=settings.system_prompt,
     )
     try:
