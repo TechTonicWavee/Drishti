@@ -30,9 +30,9 @@ docker==7.2.0
 # Vision pipeline. opencv-python-headless rather than opencv-python: the
 # headless build omits the GUI/Qt stack, which a server has no use for and
 # which would otherwise pull in a large dependency tree.
-opencv-python-headless==5.0.0.20250915
+opencv-python-headless==5.0.0.93
 pymupdf==1.28.2
 pillow==12.3.0
 
 # Multipart form parsing, required by FastAPI for file uploads.
-python-multipart==0.0.20
+python-multipart==0.0.32
