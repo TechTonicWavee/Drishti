@@ -17,6 +17,7 @@ this client never talks to a hosted API, and there is no credential to send.
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal, overload
@@ -74,7 +75,7 @@ class ModelServingClient:
     async def chat_completion(
         self,
         model: str,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         stream: Literal[True] = ...,
     ) -> AsyncIterator[str]: ...
 
@@ -82,14 +83,14 @@ class ModelServingClient:
     async def chat_completion(
         self,
         model: str,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         stream: Literal[False],
     ) -> str: ...
 
     async def chat_completion(
         self,
         model: str,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         stream: bool = True,
     ) -> AsyncIterator[str] | str:
         """Request a completion.
@@ -115,6 +116,35 @@ class ModelServingClient:
             # HTTP response stays open for as long as the caller iterates.
             return self._stream_deltas(payload)
         return await self._collect(payload)
+
+    @staticmethod
+    def image_message(
+        text: str,
+        images: Sequence[tuple[bytes, str]],
+        role: str = "user",
+    ) -> dict[str, Any]:
+        """Build a message carrying text alongside one or more images.
+
+        Uses the OpenAI-compatible multimodal content format: a list of parts,
+        each either a text part or an image_url part holding a base64 data
+        URI. Every engine that serves vision over this API accepts this shape,
+        so nothing here is specific to the model behind it — the same message
+        works against Ollama's llava today and a vision model on vLLM later.
+
+        Images are passed as (bytes, mime_type) pairs so callers hand over data
+        they already hold in memory rather than a path this module would have
+        to read, which keeps preprocessing entirely outside the client.
+        """
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for data, mime_type in images:
+            encoded = base64.b64encode(data).decode("ascii")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                }
+            )
+        return {"role": role, "content": parts}
 
     async def stream_events(
         self,
