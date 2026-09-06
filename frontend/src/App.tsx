@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import Chat from '@/components/Chat'
 import { ApiError, fetchHealth, type Health } from '@/lib/api'
 
 type Status =
@@ -35,7 +36,7 @@ export default function App() {
 
   return (
     <main className="min-h-dvh px-6 py-20 sm:py-28">
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-10">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-10">
         <header className="flex flex-col gap-3">
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
             MRPL · On-premise
@@ -56,6 +57,10 @@ export default function App() {
         >
           <StatusPanel status={status} onRetry={recheck} />
         </section>
+
+        <div className="border-t border-border pt-10">
+          <Chat />
+        </div>
 
         <footer className="text-[13px] leading-relaxed text-muted-foreground">
           Inference runs on a local Ollama instance. See{' '}

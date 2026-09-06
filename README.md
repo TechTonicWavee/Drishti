@@ -56,16 +56,18 @@ drishti-workbench/
 ├── backend/            FastAPI + Uvicorn
 │   ├── app/
 │   │   ├── main.py     app factory, middleware, router registration
-│   │   ├── core/       configuration
-│   │   └── routers/    one module per feature area; health.py today
+│   │   ├── core/       configuration (MODEL_SERVER_URL lives here)
+│   │   ├── services/   model_client.py — engine-agnostic inference client
+│   │   └── routers/    one module per feature area; health.py, chat.py
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/           Vite + React + TypeScript + Tailwind + shadcn/ui
 │   ├── src/
 │   │   ├── assets/fonts/   self-hosted Inter & Source Serif 4 (committed)
+│   │   ├── components/     Chat.tsx — streaming chat box
 │   │   ├── lib/api.ts      backend client
 │   │   ├── index.css       theme tokens
-│   │   └── App.tsx         health-check page
+│   │   └── App.tsx         health-check page + chat
 │   └── Dockerfile
 ├── docker-compose.yml  backend + frontend + ollama
 ├── .env.example
@@ -92,6 +94,13 @@ docker compose exec ollama ollama pull llama3.1:8b
 ```
 
 ### Option B — run the two services directly on your machine
+
+**Models** — pull them once (this is the only step that needs the internet):
+
+```bash
+ollama pull qwen2.5:7b
+ollama pull qwen2.5-coder:7b
+```
 
 **Backend** (Python 3.11+):
 
@@ -120,6 +129,11 @@ shows an explicit error state with a retry button.
 ```bash
 curl http://localhost:8000/health
 # {"status":"ok","offline":true}
+
+# Streaming chat — tokens arrive one SSE frame at a time.
+curl -N -X POST http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Say hello","model":"qwen2.5:7b"}'
 ```
 
 ## How the pieces talk
@@ -130,8 +144,48 @@ hostname is compiled into the bundle. The proxy target is `BACKEND_ORIGIN`,
 which docker-compose sets to `http://backend:8000` and which defaults to
 `http://127.0.0.1:8000` on a developer machine.
 
-The backend will reach Ollama at `OLLAMA_HOST` using `httpx` — that dependency
-is installed now and unused until inference routes land.
+The backend reaches the model server at `MODEL_SERVER_URL` using `httpx`. See
+**Model serving** below.
+
+## Model serving — and swapping Ollama for vLLM
+
+`app/services/model_client.py` talks to an **OpenAI-compatible
+`/v1/chat/completions` endpoint** and nothing more specific than that. Ollama
+and vLLM both implement that same contract, so the file contains no reference
+to either product — not in its code, its imports, or its error messages.
+
+Changing engines is therefore a configuration change, not a code change:
+
+| Environment | `MODEL_SERVER_URL` |
+| --- | --- |
+| Mac development / demo (Ollama) | `http://localhost:11434/v1` |
+| docker compose (Ollama) | `http://ollama:11434/v1` |
+| MRPL GPU server (vLLM) | `http://gpu-server.internal:8000/v1` |
+
+**vLLM is deliberately not a dependency of this repository.** It requires
+NVIDIA CUDA and will not install or run on the Mac dev machines, so adding it
+would break local development for everyone. It is a deployment target, not a
+package: on the GPU server you run vLLM separately and point
+`MODEL_SERVER_URL` at it.
+
+### The chat endpoints
+
+Two routes expose the same stream, because the browser's native `EventSource`
+can only issue GET requests and so cannot consume a streaming POST:
+
+- `POST /chat` — the canonical API. Body: `{"message": ..., "model": ...}`.
+  Use it from curl or any client that reads a streaming response body.
+- `GET /chat/stream?message=...&model=...` — the identical stream, reachable
+  from `new EventSource(...)`. This is what the frontend uses.
+
+Both delegate to one generator in `app/routers/chat.py`, so they cannot drift
+apart. Frames are SSE:
+
+```
+data: {"delta": "some text"}      ← one per token
+event: stream-error               ← the model failed mid-stream
+event: done                       ← client must close(); EventSource otherwise reconnects
+```
 
 ## Adding a route
 

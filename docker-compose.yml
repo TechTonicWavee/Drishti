@@ -14,8 +14,10 @@ services:
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       # Container-to-container address; overrides the localhost default in
-      # backend/app/core/config.py.
-      OLLAMA_HOST: http://ollama:11434
+      # backend/app/core/config.py. Swap this for a vLLM URL on the GPU server
+      # and nothing else changes.
+      MODEL_SERVER_URL: http://ollama:11434/v1
+      DEFAULT_MODEL: qwen2.5:7b
     ports:
       - "8000:8000"
     volumes:
@@ -47,7 +49,7 @@ services:
       - "11434:11434"
     volumes:
       # Downloaded models persist here. Pull models deliberately, e.g.
-      #   docker compose exec ollama ollama pull llama3.1:8b
+      #   docker compose exec ollama ollama pull qwen2.5:7b
       # No model is pulled automatically — that would need internet at start-up.
       - ollama-models:/root/.ollama
 
