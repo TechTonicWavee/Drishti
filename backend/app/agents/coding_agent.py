@@ -29,5 +29,5 @@ class CoderAgent(Agent):
         "often answering on behalf of another agent that cannot reply."
     )
 
-    def __init__(self, client: ModelServingClient) -> None:
-        super().__init__(client, settings.coding_model)
+    def __init__(self, client: ModelServingClient, model: str | None = None) -> None:
+        super().__init__(client, model or settings.coding_model)

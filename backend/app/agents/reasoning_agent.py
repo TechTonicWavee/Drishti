@@ -45,8 +45,8 @@ class ReasoningAgent(Agent):
         "- For a simple factual question needing neither tool, just answer."
     )
 
-    def __init__(self, client: ModelServingClient) -> None:
-        super().__init__(client, settings.reasoning_model)
+    def __init__(self, client: ModelServingClient, model: str | None = None) -> None:
+        super().__init__(client, model or settings.reasoning_model)
 
     def render_result(self, name: str, result: Any) -> str:
         """Format retrieved chunks so the model can cite them by name."""
