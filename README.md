@@ -218,6 +218,7 @@ the result back to the model, and answering.
 | --- | --- | --- |
 | **Reasoning Agent** | `qwen2.5:7b` | `search_knowledge_base`, `ask_coder_agent` |
 | **Coder Agent** | `qwen2.5-coder:7b` | `execute_code` |
+| **Vision Agent** | `qwen2.5vl:7b` | none — its capability is the scan pipeline |
 
 Tool selection is **model-driven**, not keyword-matched: agents pass their tool
 schemas to the OpenAI-compatible `/v1/chat/completions` endpoint and the model
@@ -240,6 +241,52 @@ France?" produces no call at all.
 
 Adding a capability means registering it here and naming it in an agent's
 `allowed_tools`. There is no other way in.
+
+### Reading scanned documents
+
+Drop an image or PDF onto the upload zone and it routes to the Vision Agent.
+Pages go through OpenCV first — grayscale, denoise, deskew, CLAHE, downscale —
+because real inspection paperwork arrives a couple of degrees off-square and
+speckled, and a vision model reads a clean page noticeably better.
+
+Order matters in that pipeline: deskew depends on thresholding the page to
+find the text, and thresholding speckle produces a cloud of false ink that
+drags the angle estimate around, so denoising comes first.
+
+The skew estimator is a projection-profile search, not `minAreaRect`. The
+latter was tried and **failed silently** — on one sample scan it reported
+exactly 0.00° for a visibly skewed page, and a deskew step that quietly does
+nothing is worse than none. The profile method asks the question that matters:
+at which rotation do the text lines align with image rows? All three samples
+now correct to 0.00°.
+
+PDFs are rendered page by page at 200 dpi via PyMuPDF and go through the same
+pipeline, capped at `vision_max_pages` (5) — each page is a separate model
+call on the only local GPU.
+
+**The model had to be changed.** `llava:7b` cannot read dense documents. Given
+a synthetic inspection scan it produced a *NASA equipment satisfaction report*
+with handwritten remarks — none of it on the page — and hallucinated just as
+confidently on a cropped three-line strip, so it is not a resolution problem
+preprocessing could fix. Its encoder is built for describing photographs.
+`qwen2.5vl:7b` transcribes the same scan exactly. The setting stays
+configurable, but on an inspection report a fluent invention is far more
+dangerous than a refusal, because a maintenance decision could be taken on it.
+
+Measured against the V-204 sample: **12 of 12 ground-truth tokens** — tag,
+inspector, badge number, all four measurements, the re-inspection interval —
+with nothing invented.
+
+```bash
+ollama pull qwen2.5vl:7b
+.venv/bin/python scripts/make_scanned_samples.py   # regenerate the samples
+```
+
+`vision.log` records source, page count, findings count and the deskew angles
+applied — never the extracted text, which belongs in the response rather than
+in a file accumulating the contents of everything ever uploaded. Uploads land
+in `backend/data/uploads/` under a generated UUID name (a client filename is
+never used as a path) and are swept after an hour.
 
 ### Sandboxed code execution
 
