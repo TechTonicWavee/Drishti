@@ -26,3 +26,6 @@ frontend/node_modules/.tmp/
 
 # Router audit log (runtime artefact)
 backend/logs/
+
+# Embedded vector store (rebuild with scripts/ingest_samples.py)
+backend/data/chroma/

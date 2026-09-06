@@ -36,6 +36,24 @@ class Settings(BaseSettings):
     # Fallback when the router cannot choose and the caller names no model.
     default_model: str = "qwen2.5:7b"
 
+    # Local embedding model, served by the same OpenAI-compatible endpoint.
+    embedding_model: str = "nomic-embed-text"
+
+    # How many chunks retrieval returns per question.
+    rag_top_k: int = 4
+
+    # Cosine-distance ceiling for a chunk to count as relevant. Chunks above
+    # this are discarded rather than shown, which is what stops an unrelated
+    # question from citing a document it has nothing to do with.
+    #
+    # Measured against the sample corpus rather than guessed. Four on-topic
+    # questions scored 0.260-0.314; four off-topic ones scored 0.518-0.693.
+    # This sits in the gap, with margin on both sides. An earlier guess of
+    # 0.55 would have let "write a haiku about the sea" (0.518) cite an SOP.
+    # Re-measure with scripts/ingest_samples.py output if the corpus or the
+    # embedding model changes.
+    rag_max_distance: float = 0.45
+
     # Prepended to every conversation by ModelServingClient. Users never see
     # or set this. The language clause exists because Qwen2.5 will otherwise
     # drift into Chinese when a prompt does not establish a language.
