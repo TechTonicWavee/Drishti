@@ -23,6 +23,8 @@ from typing import Any, Literal, overload
 
 import httpx
 
+from app.core import outbound
+
 # Sentinel that terminates an OpenAI-compatible SSE stream.
 _DONE = "[DONE]"
 
@@ -55,9 +57,14 @@ class ModelServingClient:
         # and would otherwise drop the final path segment (".../v1" + "chat/..."
         # becomes ".../chat/...", losing the version prefix).
         self.base_url = base_url.rstrip("/") + "/"
-        self._client = client or httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=httpx.Timeout(timeout, connect=10.0),
+        # Every request this client makes is counted, so the air-gap badge
+        # reflects real traffic rather than an assumption.
+        self._client = outbound.attach(
+            client
+            or httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=httpx.Timeout(timeout, connect=10.0),
+            )
         )
 
     async def aclose(self) -> None:
