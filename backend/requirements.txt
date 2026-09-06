@@ -36,3 +36,10 @@ pillow==12.3.0
 
 # Multipart form parsing, required by FastAPI for file uploads.
 python-multipart==0.0.32
+
+# Deliverable generation: real .docx, .pptx and .xlsx files. All three write
+# Office Open XML locally with no service call, which is why they suit an
+# air-gapped deployment where a cloud document API would not.
+python-docx==1.2.0
+python-pptx==1.0.2
+openpyxl==3.1.5
