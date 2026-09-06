@@ -32,3 +32,6 @@ backend/data/chroma/
 
 # Uploaded files (runtime artefact)
 backend/data/uploads/
+
+# Generated deliverables (runtime artefact)
+backend/data/generated/
