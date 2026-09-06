@@ -6,19 +6,32 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * Uses the browser's native EventSource, which can only issue GET requests —
  * so it connects to GET /api/chat/stream rather than POST /chat. Both routes
  * run the same server-side generator; see backend/app/routers/chat.py.
+ *
+ * The model is chosen by the backend router. The selector below is an escape
+ * hatch, not the normal path: leaving it on "Auto" sends no model at all.
  */
 
-const MODELS = ['qwen2.5:7b', 'qwen2.5-coder:7b'] as const
+const AUTO = 'auto'
+const OVERRIDE_MODELS = ['qwen2.5:7b', 'qwen2.5-coder:7b'] as const
+
+type Routing = {
+  task: string
+  agent: string
+  model: string | null
+  reason: string
+  implemented: boolean
+}
 
 type Message = {
   role: 'user' | 'assistant'
   content: string
+  routing?: Routing
 }
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [model, setModel] = useState<string>(MODELS[0])
+  const [override, setOverride] = useState<string>(AUTO)
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,6 +45,16 @@ export default function Chat() {
 
   // Don't leave a socket open if the component goes away mid-answer.
   useEffect(() => closeStream, [closeStream])
+
+  // Both handlers below patch the last message, which is always the assistant
+  // turn currently being filled in.
+  const patchLast = useCallback((patch: (m: Message) => Message) => {
+    setMessages((prev) => {
+      const next = [...prev]
+      next[next.length - 1] = patch(next[next.length - 1])
+      return next
+    })
+  }, [])
 
   const send = useCallback(
     (event: React.FormEvent) => {
@@ -49,22 +72,28 @@ export default function Chat() {
       ])
       setStreaming(true)
 
-      const params = new URLSearchParams({ message: prompt, model })
+      // No model parameter on "Auto" — the router decides.
+      const params = new URLSearchParams({ message: prompt })
+      if (override !== AUTO) params.set('model', override)
+
       const source = new EventSource(`/api/chat/stream?${params}`)
       sourceRef.current = source
 
-      const appendDelta = (delta: string) =>
-        setMessages((prev) => {
-          const next = [...prev]
-          const last = next[next.length - 1]
-          next[next.length - 1] = { ...last, content: last.content + delta }
-          return next
-        })
+      // Always arrives before the first token, so the label is in place by the
+      // time any text shows up.
+      source.addEventListener('routing', (e) => {
+        try {
+          const routing = JSON.parse((e as MessageEvent<string>).data) as Routing
+          patchLast((m) => ({ ...m, routing }))
+        } catch {
+          // A missing label is not worth discarding the answer for.
+        }
+      })
 
       source.onmessage = (e: MessageEvent<string>) => {
         try {
           const { delta } = JSON.parse(e.data) as { delta?: string }
-          if (delta) appendDelta(delta)
+          if (delta) patchLast((m) => ({ ...m, content: m.content + delta }))
         } catch {
           // A single unparseable frame is not worth killing the stream over.
         }
@@ -96,7 +125,7 @@ export default function Chat() {
         closeStream()
       }
     },
-    [closeStream, input, model, streaming],
+    [closeStream, input, override, patchLast, streaming],
   )
 
   return (
@@ -106,12 +135,13 @@ export default function Chat() {
         <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
           Model
           <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
+            value={override}
+            onChange={(e) => setOverride(e.target.value)}
             disabled={streaming}
             className="rounded-md border border-border bg-card px-2 py-1 text-[13px] text-foreground"
           >
-            {MODELS.map((m) => (
+            <option value={AUTO}>Auto (router decides)</option>
+            {OVERRIDE_MODELS.map((m) => (
               <option key={m} value={m}>
                 {m}
               </option>
@@ -128,8 +158,11 @@ export default function Chat() {
         )}
         {messages.map((m, i) => (
           <div key={i} className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              {m.role === 'user' ? 'You' : model}
+            <span
+              className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground"
+              title={m.routing?.reason}
+            >
+              {m.role === 'user' ? 'You' : formatRouting(m.routing)}
             </span>
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
               {m.content}
@@ -165,4 +198,11 @@ export default function Chat() {
       </form>
     </section>
   )
+}
+
+function formatRouting(routing: Routing | undefined): string {
+  if (!routing) return 'Routing…'
+  // model is null when the route was recognised but nothing was invoked.
+  const suffix = routing.model ? ` (${routing.model})` : ' — not yet implemented'
+  return `Routed to: ${routing.agent}${suffix}`
 }

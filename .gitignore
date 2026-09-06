@@ -23,3 +23,6 @@ dist/
 # Build caches
 .tsbuildinfo
 frontend/node_modules/.tmp/
+
+# Router audit log (runtime artefact)
+backend/logs/

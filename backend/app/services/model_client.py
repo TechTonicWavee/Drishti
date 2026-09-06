@@ -44,8 +44,13 @@ class ModelServingClient:
         base_url: str,
         *,
         timeout: float = 300.0,
+        system_prompt: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        # Injected into every conversation that does not already carry a system
+        # message. Passed in rather than hard-coded so this module stays a
+        # protocol client with no product knowledge in it.
+        self.system_prompt = system_prompt
         # Trailing slash matters: httpx resolves relative URLs against the base
         # and would otherwise drop the final path segment (".../v1" + "chat/..."
         # becomes ".../chat/...", losing the version prefix).
@@ -95,7 +100,7 @@ class ModelServingClient:
         """
         payload: dict[str, Any] = {
             "model": model,
-            "messages": list(messages),
+            "messages": self._apply_system_prompt(messages),
             "stream": stream,
         }
         if stream:
@@ -103,6 +108,21 @@ class ModelServingClient:
             # HTTP response stays open for as long as the caller iterates.
             return self._stream_deltas(payload)
         return await self._collect(payload)
+
+    def _apply_system_prompt(
+        self, messages: Sequence[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        """Prepend the configured system message.
+
+        A caller that supplies its own system message wins — this only fills a
+        gap, so callers keep the ability to override without fighting us.
+        """
+        conversation = list(messages)
+        if not self.system_prompt:
+            return conversation
+        if any(m.get("role") == "system" for m in conversation):
+            return conversation
+        return [{"role": "system", "content": self.system_prompt}, *conversation]
 
     async def _collect(self, payload: dict[str, Any]) -> str:
         try:

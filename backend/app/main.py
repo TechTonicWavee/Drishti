@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     app.state.model_client = ModelServingClient(
         settings.model_server_url,
         timeout=settings.model_request_timeout_seconds,
+        system_prompt=settings.system_prompt,
     )
     try:
         yield

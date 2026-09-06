@@ -58,6 +58,7 @@ drishti-workbench/
 │   │   ├── main.py     app factory, middleware, router registration
 │   │   ├── core/       configuration (MODEL_SERVER_URL lives here)
 │   │   ├── services/   model_client.py — engine-agnostic inference client
+│   │   │                router.py       — rule-based task classifier
 │   │   └── routers/    one module per feature area; health.py, chat.py
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -182,10 +183,69 @@ Both delegate to one generator in `app/routers/chat.py`, so they cannot drift
 apart. Frames are SSE:
 
 ```
+event: routing                    ← always first: which agent was chosen, and why
 data: {"delta": "some text"}      ← one per token
 event: stream-error               ← the model failed mid-stream
 event: done                       ← client must close(); EventSource otherwise reconnects
 ```
+
+`model` is optional on both routes. Omit it and the router chooses; supply it
+to override (the router still classifies, so `router.log` records what it
+would have picked).
+
+## Task routing
+
+`app/services/router.py` picks the model before any inference happens.
+`classify_task(message, has_attachment)` returns `"reasoning"`, `"coding"` or
+`"vision"`, mapped to:
+
+| Task | Model | Status |
+| --- | --- | --- |
+| `reasoning` | `qwen2.5:7b` | live |
+| `coding` | `qwen2.5-coder:7b` | live |
+| `vision` | — | recognised, not yet implemented |
+
+**It is regular expressions, not an LLM.** Routing sits in front of every
+request, so it has to be fast, and an operator asking "why did it pick that
+model?" deserves a concrete answer. Rules are ordered and the first match
+wins, so the logged reason names exactly the rule that fired.
+
+The keyword list is deliberately refinery-aware, because refinery English
+collides with programming English:
+
+| Message | Routes to | Why |
+| --- | --- | --- |
+| "the ASME **code** requires…" | reasoning | bare "code" is not a coding signal |
+| "the **function** of the reflux drum" | reasoning | bare "function" is not either |
+| "**shell**-and-tube exchanger" | reasoning | "shell" is excluded entirely |
+| "**rust** on the overhead line" | reasoning | "rust" is excluded entirely |
+| "pump mal**function**" | reasoning | word boundaries prevent the match |
+| "**fix the function** that computes reflux ratio" | coding | action verb + code noun |
+
+Those words only trigger the coding route with programming context around
+them. Every decision is appended to `backend/logs/router.log`:
+
+```
+2026-09-06 21:12:06 | INFO | task=reasoning | reason=no coding or vision signals matched | message="Summarize this SOP: operators must purge…"
+2026-09-06 21:12:12 | INFO | task=coding | reason=matched programming language or library: 'python' | message="Write a python script that reads a CSV…"
+```
+
+The log is a runtime artefact and is gitignored. It records a truncated copy
+of each message so a routing decision can be traced back to its input; the
+file stays on the plant's own disk like everything else here.
+
+## The system prompt
+
+`ModelServingClient` prepends `settings.system_prompt` to every conversation
+that does not already carry a system message. Users never see or set it:
+
+> You are Drishti, an AI assistant for MRPL refinery staff. Always respond in
+> English unless the user explicitly writes in another language.
+
+The language clause is load-bearing. Qwen2.5 drifts into Chinese when a prompt
+does not establish a language — "Name two products made in an oil refinery"
+reliably came back in Chinese before this was added. A caller that supplies
+its own system message still wins, so the default only fills a gap.
 
 ## Adding a route
 

@@ -28,9 +28,22 @@ class Settings(BaseSettings):
     #   vLLM (MRPL GPU):    http://gpu-server.internal:8000/v1
     model_server_url: str = "http://localhost:11434/v1"
 
-    # Model used when a request does not name one. This is an Ollama tag today;
-    # on vLLM it becomes the served model name (e.g. "Qwen/Qwen2.5-7B-Instruct").
+    # Models the router selects between. Ollama tags today; on vLLM these
+    # become the served model names (e.g. "Qwen/Qwen2.5-7B-Instruct").
+    reasoning_model: str = "qwen2.5:7b"
+    coding_model: str = "qwen2.5-coder:7b"
+
+    # Fallback when the router cannot choose and the caller names no model.
     default_model: str = "qwen2.5:7b"
+
+    # Prepended to every conversation by ModelServingClient. Users never see
+    # or set this. The language clause exists because Qwen2.5 will otherwise
+    # drift into Chinese when a prompt does not establish a language.
+    system_prompt: str = (
+        "You are Drishti, an AI assistant for MRPL refinery staff. "
+        "Always respond in English unless the user explicitly writes in "
+        "another language."
+    )
 
     # Generous ceiling: a cold model load on a laptop can take a while before
     # the first token appears.
