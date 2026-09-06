@@ -20,6 +20,7 @@ Frames on the wire:
     event: routing        one per turn, always first — which agent was picked
     event: tool           a tool ran; carries its short summary
     event: sources        documents the answer is grounded in
+    event: execution      code was run in the sandbox; carries its real output
     data:  {"delta": ...} one per token
     event: stream-error   the turn failed
     event: done           terminal; the client must close the EventSource
@@ -35,7 +36,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agents.base_agent import Agent, Delta, Sources, ToolUse
+from app.agents.base_agent import Agent, Delta, Execution, Sources, ToolUse
 from app.agents.coding_agent import CoderAgent
 from app.agents.reasoning_agent import ReasoningAgent
 from app.services.dependencies import get_model_client
@@ -149,6 +150,17 @@ async def _sse_events(
                 )
             elif isinstance(event, Sources):
                 yield _sse({"sources": event.sources}, event="sources")
+            elif isinstance(event, Execution):
+                yield _sse(
+                    {
+                        "code": event.code,
+                        "stdout": event.stdout,
+                        "stderr": event.stderr,
+                        "exit_code": event.exit_code,
+                        "timed_out": event.timed_out,
+                    },
+                    event="execution",
+                )
     except ModelServingError as exc:
         # Named "stream-error", not "error", because EventSource dispatches its
         # own connection failures under "error" and the client must be able to
