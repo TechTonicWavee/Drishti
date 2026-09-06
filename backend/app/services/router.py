@@ -24,11 +24,12 @@ programming context, which is what the ordered rules below encode.
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
+
+from app.core.logs import get_file_logger
 
 Task = Literal["reasoning", "coding", "vision"]
 
@@ -37,27 +38,7 @@ _BACKEND_ROOT: Final = Path(__file__).resolve().parents[2]
 _LOG_PATH: Final = _BACKEND_ROOT / "logs" / "router.log"
 
 
-def _build_logger() -> logging.Logger:
-    logger = logging.getLogger("drishti.router")
-    logger.setLevel(logging.INFO)
-    # Guard against duplicate handlers when the module is re-imported under
-    # uvicorn's reloader.
-    if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
-        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(_LOG_PATH, encoding="utf-8")
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s | %(levelname)s | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        logger.addHandler(handler)
-    # This log is an audit trail of its own, not console noise.
-    logger.propagate = False
-    return logger
-
-
-log = _build_logger()
+log = get_file_logger("drishti.router", "router.log")
 
 
 @dataclass(frozen=True)

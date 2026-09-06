@@ -9,6 +9,7 @@ logger.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 from pathlib import Path
 from typing import Final
 
@@ -24,7 +25,14 @@ def get_file_logger(name: str, filename: str) -> logging.Logger:
     # uvicorn's reloader.
     if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(LOG_DIR / filename, encoding="utf-8")
+        # WatchedFileHandler, not FileHandler: it reopens the file when the
+        # path stops pointing at the inode it holds. A plain FileHandler keeps
+        # writing into a deleted inode, so anything that removes or rotates
+        # the log while the server is running silently loses every subsequent
+        # entry — which is the opposite of what an audit trail is for.
+        handler = logging.handlers.WatchedFileHandler(
+            LOG_DIR / filename, encoding="utf-8"
+        )
         handler.setFormatter(
             logging.Formatter(
                 "%(asctime)s | %(levelname)s | %(message)s",

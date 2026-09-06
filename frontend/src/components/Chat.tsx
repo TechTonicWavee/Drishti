@@ -27,11 +27,18 @@ type Source = {
   distance: number
 }
 
+type ToolCall = {
+  tool: string
+  summary: string
+  ok: boolean
+}
+
 type Message = {
   role: 'user' | 'assistant'
   content: string
   routing?: Routing
   sources?: Source[]
+  tools?: ToolCall[]
 }
 
 export default function Chat() {
@@ -110,6 +117,17 @@ export default function Chat() {
         }
       })
 
+      // One per tool the agent ran. Shown in the UI so delegation and
+      // retrieval are visible as they happen, not only in the audit logs.
+      source.addEventListener('tool', (e) => {
+        try {
+          const call = JSON.parse((e as MessageEvent<string>).data) as ToolCall
+          patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), call] }))
+        } catch {
+          // A missing tool line should not cost us the answer.
+        }
+      })
+
       source.onmessage = (e: MessageEvent<string>) => {
         try {
           const { delta } = JSON.parse(e.data) as { delta?: string }
@@ -184,6 +202,16 @@ export default function Chat() {
             >
               {m.role === 'user' ? 'You' : formatRouting(m.routing)}
             </span>
+            {m.tools && m.tools.length > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                {m.tools.map((t, j) => (
+                  <span key={j} title={t.summary}>
+                    {j > 0 && ' · '}
+                    {t.ok ? '🔧' : '⚠️'} {t.tool}
+                  </span>
+                ))}
+              </p>
+            )}
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
               {m.content}
               {streaming && i === messages.length - 1 && (
