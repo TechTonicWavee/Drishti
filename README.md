@@ -57,8 +57,11 @@ drishti-workbench/
 │   ├── app/
 │   │   ├── main.py     app factory, middleware, router registration
 │   │   ├── core/       configuration (MODEL_SERVER_URL lives here)
-│   │   ├── services/   model_client.py — engine-agnostic inference client
-│   │   │                router.py       — rule-based task classifier
+│   │   ├── services/   model_client.py    — engine-agnostic inference client
+│   │   │                router.py          — rule-based task classifier
+│   │   │                knowledge_base.py  — chunking, embedding, retrieval
+│   │   ├── data/       sample_docs/ (committed), chroma/ (gitignored)
+│   │   └── scripts/    ingest_samples.py
 │   │   └── routers/    one module per feature area; health.py, chat.py
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -99,8 +102,15 @@ docker compose exec ollama ollama pull llama3.1:8b
 **Models** — pull them once (this is the only step that needs the internet):
 
 ```bash
-ollama pull qwen2.5:7b
-ollama pull qwen2.5-coder:7b
+ollama pull qwen2.5:7b          # reasoning
+ollama pull qwen2.5-coder:7b    # coding
+ollama pull nomic-embed-text    # embeddings for retrieval
+```
+
+Then build the vector store from the sample documents:
+
+```bash
+cd backend && .venv/bin/python scripts/ingest_samples.py
 ```
 
 **Backend** (Python 3.11+):
@@ -246,6 +256,84 @@ The language clause is load-bearing. Qwen2.5 drifts into Chinese when a prompt
 does not establish a language — "Name two products made in an oil refinery"
 reliably came back in Chinese before this was added. A caller that supplies
 its own system message still wins, so the default only fills a gap.
+
+## Retrieval (RAG)
+
+Reasoning turns are grounded in a local document store before the model is
+called. Nothing leaves the machine: documents are chunked, embedded through
+the same local model server that serves chat, and stored in an **embedded**
+ChromaDB under `backend/data/chroma/` — in-process, no vector-store server, no
+port listening.
+
+```
+question → embed (nomic-embed-text) → ChromaDB cosine search
+         → drop chunks above the distance threshold
+         → surviving chunks go into the system message
+         → model answers, citing the source
+```
+
+### Two ChromaDB defaults that had to be switched off
+
+Both would have broken the air gap silently:
+
+1. **Anonymised telemetry** posts usage data to PostHog. Disabled through both
+   the `ANONYMIZED_TELEMETRY` environment variable (set before the import,
+   since the telemetry client reads it during module init) and the `Settings`
+   object.
+2. **The default embedding function** downloads an ONNX model from the
+   internet the first time it is called. It is unreachable here: the
+   collection is created with `embedding_function=None` and every call passes
+   vectors computed locally.
+
+Verified rather than assumed — during three consecutive RAG queries the
+backend process held only these sockets:
+
+```
+127.0.0.1:8000  (LISTEN)          ← inbound
+127.0.0.1:*  ->  127.0.0.1:11434  ← the local model server
+```
+
+Zero non-loopback connections.
+
+### Why answers do not cite the wrong document
+
+Relevance is a measured threshold, not a guess. Across the sample corpus:
+
+| | cosine distance |
+| --- | --- |
+| on-topic questions | 0.260 – 0.314 |
+| off-topic questions | 0.518 – 0.693 |
+
+`rag_max_distance` sits at **0.45**, in the gap. Chunks above it are dropped
+before they reach either the prompt or the UI, so an unrelated question has
+nothing to cite. An earlier guess of 0.55 would have let *"write a haiku about
+the sea"* (0.518) cite a refinery SOP.
+
+Coding turns are deliberately left ungrounded — an SOP corpus is noise in a
+request to write a script.
+
+### Sample documents
+
+`backend/data/sample_docs/` holds three synthetic SOP excerpts (~450 words
+each): an FCC unit shutdown procedure, pressure vessel inspection guidelines,
+and a confined space entry procedure. Each opens with a banner stating it is
+fictional and must not be used for actual plant operations — they read like
+real procedures, and one being mistaken for an operational document is a
+safety problem, not just a data-quality one. **No real MRPL data is used, and
+none is needed.**
+
+### Adding your own documents
+
+`.txt` and `.pdf` are supported (PDF text via `pypdf`):
+
+```python
+from app.services.knowledge_base import ingest_document
+await ingest_document("/path/to/procedure.pdf")
+```
+
+Re-ingesting a file replaces its chunks rather than duplicating them, so
+`scripts/ingest_samples.py` is safe to re-run. The store is gitignored;
+rebuild it with that script.
 
 ## Adding a route
 
