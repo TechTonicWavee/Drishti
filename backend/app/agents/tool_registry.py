@@ -358,13 +358,24 @@ def _record_artifact(context: dict[str, Any], kind: str, path: str) -> str:
 
 async def _generate_approval_note(
     *, context: dict[str, Any], findings: list[str], title: str,
-    source_document: str = "the conversation",
+    source_document: str | None = None,
 ) -> str:
     from app.services.document_generator import generate_approval_note
 
+    # Fall back to what the turn already knows. The model frequently omits
+    # this argument, and an approval note whose source reads "the
+    # conversation" is not traceable back to the scan it came from — which is
+    # most of the point of recording a source at all.
+    source = (
+        source_document
+        or context.get("source_document")
+        or context.get("attachment_name")
+        or "the conversation"
+    )
+
     # Writing a file is blocking; a thread keeps the event loop free.
     path = await asyncio.to_thread(
-        generate_approval_note, list(findings), title, source_document
+        generate_approval_note, list(findings), title, str(source)
     )
     return _record_artifact(context, "approval_note", path)
 
