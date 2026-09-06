@@ -119,3 +119,139 @@ async def call(
         tool.summarize(result),
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Registered tools
+#
+# Everything an agent can do is declared below. Adding a capability means
+# adding it here and naming it in an agent's allowed_tools — there is no other
+# route in.
+# ---------------------------------------------------------------------------
+
+from app.core.config import settings  # noqa: E402
+from app.core.logs import get_file_logger  # noqa: E402
+
+delegation_log = get_file_logger("drishti.delegation", "delegation.log")
+
+# Delegation is one level deep by design. The Coder Agent holds no tools, so
+# it cannot delegate back, but the counter makes that a guarantee rather than
+# a consequence of the current configuration.
+MAX_DELEGATION_DEPTH = 1
+
+
+async def _search_knowledge_base(
+    *, context: dict[str, Any], query: str, top_k: int | None = None
+) -> list[dict[str, Any]]:
+    """Retrieve relevant document chunks, filtered by relevance."""
+    from app.services import knowledge_base
+
+    hits = await knowledge_base.search(
+        query,
+        top_k or settings.rag_top_k,
+        client=context.get("client"),
+    )
+    # Filtering here, not at the call site, so every caller gets the same
+    # guarantee: an irrelevant chunk never reaches a prompt or the UI.
+    return [h for h in hits if h["distance"] <= settings.rag_max_distance]
+
+
+def _summarize_search(result: Any) -> str:
+    if not result:
+        return "0 chunks (nothing above the relevance threshold)"
+    sources = sorted({h["source"] for h in result})
+    nearest = min(h["distance"] for h in result)
+    return f"{len(result)} chunk(s) from {', '.join(sources)} (nearest {nearest:.3f})"
+
+
+async def _ask_coder_agent(*, context: dict[str, Any], question: str) -> str:
+    """Hand a coding sub-question to the Coder Agent and return its answer."""
+    # Late import: coding_agent imports base_agent, which imports this module.
+    # Importing at module level would be a cycle.
+    from app.agents.coding_agent import CoderAgent
+
+    asker = context.get("agent", "unknown")
+    depth = context.get("delegation_depth", 0)
+
+    if depth >= MAX_DELEGATION_DEPTH:
+        delegation_log.warning(
+            'from=%s | to=Coder Agent | REFUSED (depth %s) | question="%s"',
+            asker, depth, _preview(question),
+        )
+        raise ToolError("Delegation depth exceeded; answer directly instead.")
+
+    client = context.get("client")
+    if client is None:
+        raise ToolError("No model client available for delegation.")
+
+    delegation_log.info(
+        'from=%s | to=Coder Agent | ASKED | question="%s"', asker, _preview(question)
+    )
+
+    coder = CoderAgent(client)
+    answer = await coder.run(
+        question,
+        {**context, "delegation_depth": depth + 1, "delegated_from": asker},
+    )
+
+    delegation_log.info(
+        'from=%s | to=Coder Agent | ANSWERED | %d chars | reply="%s"',
+        asker, len(answer), _preview(answer),
+    )
+    return answer
+
+
+def _preview(text: str, limit: int = 100) -> str:
+    return " ".join(text.split())[:limit]
+
+
+register(
+    Tool(
+        name="search_knowledge_base",
+        description=(
+            "Search the plant's internal documents — standard operating "
+            "procedures, inspection guidelines, safety procedures — for "
+            "excerpts relevant to a question. Use this for anything about "
+            "plant equipment, procedures, standards or safety."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for, in plain language.",
+                }
+            },
+            "required": ["query"],
+        },
+        func=_search_knowledge_base,
+        summarize=_summarize_search,
+    )
+)
+
+register(
+    Tool(
+        name="ask_coder_agent",
+        description=(
+            "Delegate a programming task to the coding specialist and get its "
+            "answer back. Use this when a request needs code written, "
+            "debugged or explained. Pass a self-contained description of only "
+            "the coding part."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "The coding task, stated so it can be understood "
+                        "without the surrounding conversation."
+                    ),
+                }
+            },
+            "required": ["question"],
+        },
+        func=_ask_coder_agent,
+        summarize=lambda r: f"delegated; {len(r)} char reply",
+    )
+)
