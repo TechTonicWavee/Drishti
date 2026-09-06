@@ -1,0 +1,22 @@
+SAMPLE DOCUMENT — FICTIONAL CONTENT FOR DEMONSTRATION ONLY
+
+ROTATING EQUIPMENT VIBRATION LIMITS
+Document reference: SAMPLE-SOP-ROT-031, Revision 4
+
+1. SCOPE
+Applies to all centrifugal pumps and compressors above 15 kW in refinery
+service.
+
+2. ALARM AND TRIP THRESHOLDS
+2.1 Overall vibration velocity shall be trended weekly at the bearing housings.
+2.2 The alert threshold is 4.5 mm/s RMS. Above this, increase monitoring to
+daily and raise a maintenance notification.
+2.3 The alarm threshold is 7.1 mm/s RMS. Above this, plan a shutdown within
+seven days.
+2.4 The trip threshold is 11.0 mm/s RMS. Above this, stop the machine
+immediately and switch to the standby unit.
+
+3. BEARING TEMPERATURE
+3.1 Bearing housing temperature shall not exceed 85 degrees Celsius.
+3.2 A rise of more than 10 degrees within one shift is itself a finding, even
+if the absolute value remains acceptable.

@@ -675,16 +675,33 @@ none is needed.**
 
 ### Adding your own documents
 
-`.txt` and `.pdf` are supported (PDF text via `pypdf`):
+Use the **Knowledge base** panel at the top of the UI: drag in a `.txt`, `.md`
+or `.pdf` and it is indexed immediately, listed with its chunk count, and
+citable from the next question onward. The same panel removes a document from
+both the index and disk.
 
-```python
-from app.services.knowledge_base import ingest_document
-await ingest_document("/path/to/procedure.pdf")
+> **This is not the chat's upload zone.** Dropping a scan into the chat sends
+> it to the Vision Agent, which reads the page once and discards it. Only the
+> Knowledge base panel indexes anything.
+
+| | Where |
+| --- | --- |
+| Source files | `backend/data/sample_docs/` |
+| Searchable index (embeddings) | `backend/data/chroma/` |
+
+Equivalent API and script routes:
+
+```bash
+curl -X POST http://localhost:8000/documents -F "file=@procedure.txt"
+curl http://localhost:8000/documents            # list what is indexed
 ```
 
-Re-ingesting a file replaces its chunks rather than duplicating them, so
-`scripts/ingest_samples.py` is safe to re-run. The store is gitignored;
-rebuild it with that script.
+```bash
+cd backend && .venv/bin/python scripts/ingest_samples.py   # rebuild from disk
+```
+
+Re-adding the same filename updates that document rather than duplicating it.
+The store is gitignored; the script rebuilds it from `sample_docs/`.
 
 ## Adding a route
 
