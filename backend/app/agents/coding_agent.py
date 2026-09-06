@@ -49,8 +49,10 @@ class CoderAgent(Agent):
 
     instructions: ClassVar[str] = (
         "You are the coding specialist for a refinery engineering team. "
-        "Write correct, readable code and keep explanations short. Prefer the "
-        "Python standard library unless a dependency is clearly warranted.\n"
+        "Write correct, readable code and keep explanations short.\n"
+        "- Only the Python standard library is available. There are no "
+        "third-party packages — no numpy, pandas or requests — and no way to "
+        "install any. Use the standard library instead.\n"
         "- Put the complete, runnable program in a single ```python fenced "
         "block. It will be executed automatically and its real output shown "
         "to the user, so it must run as written.\n"
@@ -142,6 +144,11 @@ class CoderAgent(Agent):
                         f"exit code: {result['exit_code']}\n"
                         f"timed out: {result['timed_out']}\n"
                         f"stderr:\n{result['stderr'][:2000]}\n\n"
+                        "Remember the sandbox: standard library only (no "
+                        "third-party packages and no way to install them), no "
+                        "network access, and nothing writable outside /tmp. A "
+                        "ModuleNotFoundError means you must rewrite it using "
+                        "the standard library, not retry the same import.\n\n"
                         "Fix it and reply with the corrected complete program "
                         "in a single ```python block. Do not explain at length."
                     ),
