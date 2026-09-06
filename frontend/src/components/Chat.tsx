@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import AgentTrace, { type TraceStep } from '@/components/AgentTrace'
+import Markdown from '@/components/Markdown'
 
 /**
  * The chat surface.
@@ -343,12 +344,12 @@ export default function Chat() {
               )}
 
               {m.content && (
-                <p className="whitespace-pre-wrap text-[15px] leading-relaxed">
-                  {m.content}
+                <div>
+                  <Markdown>{m.content}</Markdown>
                   {streaming && i === messages.length - 1 && (
                     <span className="ml-0.5 inline-block animate-pulse">▍</span>
                   )}
-                </p>
+                </div>
               )}
 
               {m.artifacts?.map((file, k) => (
