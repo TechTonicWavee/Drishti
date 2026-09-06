@@ -41,6 +41,13 @@ type ExecutionResult = {
   timed_out: boolean
 }
 
+type ArtifactFile = {
+  filename: string
+  kind: string
+  url: string
+  size_bytes: number
+}
+
 type Message = {
   role: 'user' | 'assistant'
   content: string
@@ -48,6 +55,7 @@ type Message = {
   sources?: Source[]
   tools?: ToolCall[]
   executions?: ExecutionResult[]
+  artifacts?: ArtifactFile[]
 }
 
 export default function Chat() {
@@ -96,6 +104,12 @@ export default function Chat() {
             break
           case 'tool':
             patchLast((m) => ({ ...m, tools: [...(m.tools ?? []), payload as ToolCall] }))
+            break
+          case 'artifact':
+            patchLast((m) => ({
+              ...m,
+              artifacts: [...(m.artifacts ?? []), payload as ArtifactFile],
+            }))
             break
           case 'execution':
             patchLast((m) => ({
@@ -146,7 +160,14 @@ export default function Chat() {
       const source = new EventSource(`/api/chat/stream?${params}`)
       sourceRef.current = source
 
-      for (const name of ['routing', 'sources', 'tool', 'execution', 'stream-error']) {
+      for (const name of [
+        'routing',
+        'sources',
+        'tool',
+        'execution',
+        'artifact',
+        'stream-error',
+      ]) {
         source.addEventListener(name, (e) =>
           applyEvent(name, (e as MessageEvent<string>).data),
         )
@@ -274,6 +295,9 @@ export default function Chat() {
                 <span className="ml-0.5 inline-block animate-pulse">▍</span>
               )}
             </p>
+            {m.artifacts?.map((file, k) => (
+              <DeliverableCard key={k} file={file} />
+            ))}
             {m.executions?.map((run, k) => (
               <ExecutionBlock key={k} run={run} index={k} total={m.executions!.length} />
             ))}
@@ -312,6 +336,49 @@ export default function Chat() {
         </button>
       </form>
     </section>
+  )
+}
+
+const FILE_ICONS: Record<string, string> = {
+  '.docx': '📄',
+  '.pptx': '📊',
+  '.xlsx': '🧮',
+}
+
+const KIND_LABELS: Record<string, string> = {
+  approval_note: 'Word approval note',
+  summary_deck: 'PowerPoint deck',
+  calculation_sheet: 'Excel calculation sheet',
+}
+
+function DeliverableCard({ file }: { file: ArtifactFile }) {
+  const extension = file.filename.slice(file.filename.lastIndexOf('.')).toLowerCase()
+  const label = KIND_LABELS[file.kind] ?? 'Document'
+  const kb = Math.max(1, Math.round(file.size_bytes / 1024))
+
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+      <span aria-hidden className="text-[22px] leading-none">
+        {FILE_ICONS[extension] ?? '📎'}
+      </span>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate text-[13px] font-medium" title={file.filename}>
+          {file.filename}
+        </span>
+        <span className="text-[11px] text-muted-foreground">
+          {label} · {kb} KB
+        </span>
+      </div>
+      {/* A plain link: the endpoint sets Content-Disposition: attachment, so
+          the browser saves it rather than trying to render Office XML. */}
+      <a
+        href={file.url}
+        download={file.filename}
+        className="ml-auto shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+      >
+        Download
+      </a>
+    </div>
   )
 }
 
