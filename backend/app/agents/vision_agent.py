@@ -128,6 +128,12 @@ class VisionAgent(Agent):
 
         try:
             result = await self.extract_findings(str(path))
+            # Uploads are stored under a generated UUID name so a hostile
+            # filename cannot become a path. Show the name the user
+            # recognises, not the one on disk.
+            display_name = context.get("attachment_name")
+            if display_name:
+                result = {**result, "source_file": str(display_name)}
         except ImagePrepError as exc:
             yield Delta(f"That file could not be read: {exc}")
             return
