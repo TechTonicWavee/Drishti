@@ -21,6 +21,7 @@ Frames on the wire:
     event: tool           a tool ran; carries its short summary
     event: sources        documents the answer is grounded in
     event: execution      code was run in the sandbox; carries its real output
+    event: artifact       a real file was generated and can be downloaded
     data:  {"delta": ...} one per token
     event: stream-error   the turn failed
     event: done           terminal; the client must close the EventSource
@@ -39,7 +40,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agents.base_agent import Agent, Delta, Execution, Sources, ToolUse
+from app.agents.base_agent import (
+    Agent,
+    Artifact,
+    Delta,
+    Execution,
+    Sources,
+    ToolUse,
+)
 from app.agents.coding_agent import CoderAgent
 from app.agents.reasoning_agent import ReasoningAgent
 from app.agents.vision_agent import (
@@ -150,6 +158,16 @@ async def _sse_events(
                 )
             elif isinstance(event, Sources):
                 yield _sse({"sources": event.sources}, event="sources")
+            elif isinstance(event, Artifact):
+                yield _sse(
+                    {
+                        "filename": event.filename,
+                        "kind": event.kind,
+                        "url": event.url,
+                        "size_bytes": event.size_bytes,
+                    },
+                    event="artifact",
+                )
             elif isinstance(event, Execution):
                 yield _sse(
                     {
