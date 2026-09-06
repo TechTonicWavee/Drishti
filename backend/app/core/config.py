@@ -39,6 +39,22 @@ class Settings(BaseSettings):
     # Local embedding model, served by the same OpenAI-compatible endpoint.
     embedding_model: str = "nomic-embed-text"
 
+    # Vision model for scanned documents and photographs.
+    vision_model: str = "llava:7b"
+
+    # Vision runs a model over a rendered page image, which is slower than a
+    # text turn — a cold llava load plus a full page can exceed the default.
+    vision_request_timeout_seconds: float = 600.0
+
+    # Cap on PDF pages processed in one upload. Each page is a separate model
+    # call, so an unbounded document would occupy the only local GPU for a
+    # very long time.
+    vision_max_pages: int = 5
+
+    # Largest upload accepted, in bytes. Rejected before the file is read into
+    # memory rather than after.
+    max_upload_bytes: int = 25 * 1024 * 1024
+
     # How many chunks retrieval returns per question.
     rag_top_k: int = 4
 
