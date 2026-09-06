@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import AirGapBadge from '@/components/AirGapBadge'
 import Chat from '@/components/Chat'
 import { ApiError, fetchHealth, type Health } from '@/lib/api'
 
@@ -36,6 +37,7 @@ export default function App() {
 
   return (
     <main className="min-h-dvh px-6 py-20 sm:py-28">
+      <AirGapBadge />
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-10">
         <header className="flex flex-col gap-3">
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
