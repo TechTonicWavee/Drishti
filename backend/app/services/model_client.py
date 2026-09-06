@@ -116,6 +116,46 @@ class ModelServingClient:
             return self._stream_deltas(payload)
         return await self._collect(payload)
 
+    async def chat_message(
+        self,
+        model: str,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """One non-streaming turn, returning the whole assistant message.
+
+        Unlike chat_completion this hands back the message object rather than
+        its text, because a tool-calling turn carries no text at all — the
+        useful part is the `tool_calls` array. Streaming is not used here: a
+        decision to call a tool is not worth rendering token by token, and the
+        arguments are only valid once complete.
+        """
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": self._apply_system_prompt(messages),
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = list(tools)
+
+        try:
+            response = await self._client.post("chat/completions", json=payload)
+            response.raise_for_status()
+            body = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ModelServingError(self._describe_status(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise ModelServingError(self._describe_transport(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise ModelServingError("Model server returned malformed JSON.") from exc
+
+        try:
+            return body["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelServingError(
+                "Model server returned a response in an unexpected shape."
+            ) from exc
+
     async def embed(
         self, model: str, texts: Sequence[str]
     ) -> list[list[float]]:
@@ -156,14 +196,14 @@ class ModelServingClient:
         return vectors
 
     def _apply_system_prompt(
-        self, messages: Sequence[dict[str, str]]
-    ) -> list[dict[str, str]]:
+        self, messages: Sequence[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Prepend the configured system message.
 
         A caller that supplies its own system message wins — this only fills a
         gap, so callers keep the ability to override without fighting us.
         """
-        conversation = list(messages)
+        conversation: list[dict[str, Any]] = list(messages)
         if not self.system_prompt:
             return conversation
         if any(m.get("role") == "system" for m in conversation):
