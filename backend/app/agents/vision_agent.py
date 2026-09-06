@@ -149,8 +149,14 @@ def _parse_reply(content: str) -> tuple[str, list[str]]:
     if not content:
         return "", []
 
-    match = re.search(r"^\s*FINDINGS\s*:?\s*$", content, re.I | re.M)
-    if match:
+    # The LAST heading, not the first. The transcription reproduces the page,
+    # and an inspection page has its own "FINDINGS" heading printed on it —
+    # splitting on the first match cuts the transcription short and then mines
+    # the transcribed items as though they were the model's analysis, which
+    # yields every finding twice.
+    headings = list(re.finditer(r"^\s*FINDINGS\s*:?\s*$", content, re.I | re.M))
+    if headings:
+        match = headings[-1]
         raw = content[: match.start()]
         tail = content[match.end() :]
     else:
