@@ -109,6 +109,45 @@ class ModelServingClient:
             return self._stream_deltas(payload)
         return await self._collect(payload)
 
+    async def embed(
+        self, model: str, texts: Sequence[str]
+    ) -> list[list[float]]:
+        """Embed one or more texts, returning vectors in the input order.
+
+        `/v1/embeddings` is part of the same OpenAI-compatible surface as
+        chat completions, so this stays engine-neutral: Ollama serves it today
+        and vLLM serves it on the GPU server.
+        """
+        if not texts:
+            return []
+
+        payload = {"model": model, "input": list(texts)}
+        try:
+            response = await self._client.post("embeddings", json=payload)
+            response.raise_for_status()
+            body = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ModelServingError(self._describe_status(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise ModelServingError(self._describe_transport(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise ModelServingError("Model server returned malformed JSON.") from exc
+
+        try:
+            # The server may return items out of order; "index" is authoritative.
+            items = sorted(body["data"], key=lambda item: item["index"])
+            vectors = [item["embedding"] for item in items]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelServingError(
+                "Model server returned embeddings in an unexpected shape."
+            ) from exc
+
+        if len(vectors) != len(texts):
+            raise ModelServingError(
+                f"Asked for {len(texts)} embeddings but received {len(vectors)}."
+            )
+        return vectors
+
     def _apply_system_prompt(
         self, messages: Sequence[dict[str, str]]
     ) -> list[dict[str, str]]:
