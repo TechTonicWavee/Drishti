@@ -22,10 +22,16 @@ type Routing = {
   implemented: boolean
 }
 
+type Source = {
+  source: string
+  distance: number
+}
+
 type Message = {
   role: 'user' | 'assistant'
   content: string
   routing?: Routing
+  sources?: Source[]
 }
 
 export default function Chat() {
@@ -87,6 +93,20 @@ export default function Chat() {
           patchLast((m) => ({ ...m, routing }))
         } catch {
           // A missing label is not worth discarding the answer for.
+        }
+      })
+
+      // Reasoning turns only, and only for chunks that cleared the relevance
+      // threshold — an empty list here means nothing was close enough, which
+      // is why an unrelated question shows no sources at all.
+      source.addEventListener('sources', (e) => {
+        try {
+          const { sources } = JSON.parse((e as MessageEvent<string>).data) as {
+            sources?: Source[]
+          }
+          if (sources?.length) patchLast((m) => ({ ...m, sources }))
+        } catch {
+          // Losing the citation list should not cost us the answer.
         }
       })
 
@@ -170,6 +190,12 @@ export default function Chat() {
                 <span className="ml-0.5 inline-block animate-pulse">▍</span>
               )}
             </p>
+            {m.sources && m.sources.length > 0 && (
+              <p className="text-[12px] text-muted-foreground">
+                Sources:{' '}
+                {m.sources.map((s) => s.source).join(', ')}
+              </p>
+            )}
           </div>
         ))}
       </div>
