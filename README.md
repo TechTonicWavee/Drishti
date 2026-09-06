@@ -56,6 +56,8 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Real deliverables — `.docx`, `.pptx`, `.xlsx` — with download | ✅ |
 | Network-isolation proof: in-process counter, OS socket monitor, pf firewall | ✅ |
 | Agent trace in the UI, read back from the audit logs | ✅ |
+| Follow-up questions within a conversation (recent turns replayed) | ✅ |
+| Knowledge base management from the UI — add, list, remove documents | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
@@ -75,6 +77,11 @@ the repository today.**
 - **Hardware tiers.** Model choice is currently one setting for one machine.
   A real rollout wants a small tier for a laptop and a larger tier for the
   GPU server, selected by profile.
+- **Saved conversation threads.** Follow-ups work within a session, but
+  nothing is persisted: reload the page and the conversation is gone. There is
+  no thread list and no stored per-person memory — the latter needs auth
+  first, since with no login there is no "person" to attach memory to, and on
+  a shared plant terminal it would blend different operators' context.
 - **Concurrency.** The agent trace correlates by time window because the logs
   carry no request id; under simultaneous users a trace would collect its
   neighbours' steps. Threading a request id through every log line fixes it.
