@@ -29,6 +29,7 @@ Frames on the wire:
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -136,6 +137,7 @@ async def _sse_events(
     agent_context: dict[str, object] = {}
     if attachment_path is not None:
         agent_context["attachment_path"] = str(attachment_path)
+        agent_context["attachment_name"] = attachment_name
 
     try:
         async for event in route.agent.run_stream(message, agent_context):
@@ -221,6 +223,24 @@ async def chat_stream(
     return _stream(message, model, has_attachment, attachment_name, client)
 
 
+# Uploads are working files, not a document store. Anything older than this is
+# removed on the next upload: scanned inspection paperwork is plant data, and
+# leaving every page ever uploaded on disk indefinitely is a retention problem
+# nobody asked for.
+_UPLOAD_RETENTION_SECONDS = 60 * 60
+
+
+def _prune_old_uploads() -> None:
+    cutoff = time.time() - _UPLOAD_RETENTION_SECONDS
+    for stale in _UPLOAD_DIR.iterdir():
+        try:
+            if stale.is_file() and stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            # Housekeeping must never fail the upload it runs alongside.
+            continue
+
+
 async def _save_upload(file: UploadFile) -> Path:
     """Write an upload to disk under a generated name.
 
@@ -239,6 +259,7 @@ async def _save_upload(file: UploadFile) -> Path:
         )
 
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_old_uploads()
     destination = _UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
 
     written = 0
