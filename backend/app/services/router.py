@@ -97,21 +97,34 @@ _CODING_RULES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     ("script mention", re.compile(r"\bscripts?\b", re.I)),
 )
 
-_IMAGE_SUFFIXES: Final = frozenset(
-    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic"}
+# Everything the vision agent can actually read. Kept as a literal here rather
+# than imported from the agent so this module stays dependency-light and
+# deterministic — but it must not drift from vision_agent's own set.
+_VISION_SUFFIXES: Final = frozenset(
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff",
+        ".heic",
+        # PDFs are rendered page by page and read like any other scan. They
+        # were excluded here once, on the theory that a separate document
+        # route would claim them. It never did, so a PDF dropped on the chat
+        # was routed to the reasoning agent, which receives only the filename
+        # and no content — it answered every question with "please specify
+        # your question", because from where it sat there was nothing there.
+        ".pdf",
+    }
 )
 
 
-def _looks_like_image(attachment_name: str | None) -> bool:
+def _vision_can_read(attachment_name: str | None) -> bool:
     """Whether an attachment should go to the vision route.
 
-    An unnamed attachment is treated as an image: vision is the only
-    attachment route that exists today, so an unknown file has nowhere else
-    to go. Once document handling lands, this is the place to split them.
+    An unnamed attachment is treated as readable: vision is the only
+    attachment route that exists, so an unknown file has nowhere else to go,
+    and the agent reports a clear error if it turns out not to be readable.
     """
     if attachment_name is None:
         return True
-    return Path(attachment_name).suffix.lower() in _IMAGE_SUFFIXES
+    return Path(attachment_name).suffix.lower() in _VISION_SUFFIXES
 
 
 def classify(
@@ -124,9 +137,9 @@ def classify(
     `attachment_name` is optional: `has_attachment` alone cannot distinguish a
     photograph from a PDF, so callers pass the filename when they have it.
     """
-    if has_attachment and _looks_like_image(attachment_name):
+    if has_attachment and _vision_can_read(attachment_name):
         described = attachment_name or "unnamed attachment"
-        result = Classification("vision", f"image attachment: '{described}'")
+        result = Classification("vision", f"readable attachment: '{described}'")
         _record(result, message)
         return result
 
