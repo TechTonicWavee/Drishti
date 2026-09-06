@@ -47,14 +47,39 @@ class VisionAgent(Agent):
     """
 
     name: ClassVar[str] = "Vision Agent"
-    allowed_tools: ClassVar[list[str]] = []
+    allowed_tools: ClassVar[list[str]] = ["ask_document_agent"]
     instructions: ClassVar[str] = (
         "You read scanned engineering documents and report what is on the "
         "page. Never invent details that are not visible."
     )
 
+    # Instructions for the handoff turn, which runs after extraction on a
+    # different model. Kept separate because the extraction prompt is about
+    # transcribing a page and this one is about what to do with the result.
+    handoff_instructions: ClassVar[str] = (
+        "You have just read a scanned document and extracted its findings. "
+        "Decide what the user's request needs now.\n"
+        "- If they asked for a document, note, report, deck, slides or "
+        "spreadsheet to be produced, call ask_document_agent. The findings "
+        "are passed along automatically, so you need only say what is "
+        "wanted.\n"
+        "- Otherwise answer their question directly from the findings.\n"
+        "- Do not repeat the findings back; they have already been shown."
+    )
+
     def __init__(self, client: ModelServingClient, model: str | None = None) -> None:
         super().__init__(client, model or settings.vision_model)
+
+    @property
+    def tool_model(self) -> str:
+        """Tool turns run on the reasoning model, not the vision model.
+
+        qwen2.5vl:7b cannot call tools at all — Ollama lists only completion
+        and vision for it, and the API rejects a request carrying tools with
+        HTTP 400. So the page is read by the vision model and the decision
+        about what to do next is taken by a model that can act on it.
+        """
+        return settings.reasoning_model
 
     async def extract_findings(self, image_or_pdf_path: str) -> dict[str, Any]:
         """Read a scan or PDF and return its text and discrete findings.
@@ -143,6 +168,37 @@ class VisionAgent(Agent):
 
         for chunk in _format(result, message):
             yield Delta(chunk)
+
+        # Nothing was asked beyond "read this", so the extraction is the answer.
+        if not message.strip():
+            return
+
+        # Hand the findings to a tool-capable turn, which may delegate to the
+        # document agent. Findings travel in the context rather than in the
+        # model's arguments, so measurements cannot be reworded on the way.
+        conversation: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": f"{settings.system_prompt}\n\n{self.handoff_instructions}",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{message.strip()}\n\n"
+                    f"Findings extracted from {result['source_file']}:\n"
+                    + "\n".join(f"- {f}" for f in result["findings"])
+                ),
+            },
+        ]
+        handoff_context = {
+            **context,
+            "findings": result["findings"],
+            "source_document": result["source_file"],
+        }
+
+        yield Delta("\n\n---\n\n")
+        async for event in self.tool_loop(conversation, handoff_context):
+            yield event
 
 
 def _parse_reply(content: str) -> tuple[str, list[str]]:
