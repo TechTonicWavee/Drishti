@@ -218,7 +218,8 @@ the result back to the model, and answering.
 | --- | --- | --- |
 | **Reasoning Agent** | `qwen2.5:7b` | `search_knowledge_base`, `ask_coder_agent` |
 | **Coder Agent** | `qwen2.5-coder:7b` | `execute_code` |
-| **Vision Agent** | `qwen2.5vl:7b` | none — its capability is the scan pipeline |
+| **Vision Agent** | `qwen2.5vl:7b` | `ask_document_agent` (handoff runs on `qwen2.5:7b`) |
+| **Document Agent** | `qwen2.5:7b` | the three generators |
 
 Tool selection is **model-driven**, not keyword-matched: agents pass their tool
 schemas to the OpenAI-compatible `/v1/chat/completions` endpoint and the model
@@ -241,6 +242,49 @@ France?" produces no call at all.
 
 Adding a capability means registering it here and naming it in an agent's
 `allowed_tools`. There is no other way in.
+
+### Deliverables
+
+The workbench produces real `.docx`, `.pptx` and `.xlsx` files, not chat text
+someone then retypes. All three libraries write Office Open XML locally, which
+is what makes this possible with no service call.
+
+| Tool | Produces |
+| --- | --- |
+| `generate_approval_note` | Word note: findings plus a signature block |
+| `generate_summary_deck` | PowerPoint: title slide, one slide per section |
+| `generate_calculation_sheet` | Excel: one row per step — description, formula, result |
+
+Either the Reasoning Agent or the Vision Agent can hand off via
+`ask_document_agent`. Findings travel through the **tool context**, not the
+model's arguments: making a model retype a page of extracted text into a tool
+call is how a measurement gets quietly reworded.
+
+`GET /files/{filename}` serves them, restricted to `backend/data/generated/`
+by two checks — the name must equal its own basename, and the resolved path
+must still be inside that directory.
+
+**Two things had to be made deterministic**, both found by running the chain
+and getting a confident reply with no file:
+
+1. **The model does not reliably call a generator.** Asked to draft an
+   approval note it would reply with the text of one. The Document Agent now
+   checks whether a file appeared, nudges once, and failing that builds the
+   document directly from the findings in context.
+2. **An artifact produced inside a delegated agent was lost.** The shared list
+   was drained on emit, so a sub-agent emptied it and left its caller nothing
+   to report — the file existed on disk and was never offered. Draining is
+   replaced by per-level index tracking, which works at any nesting depth.
+
+A third fix came from reading a generated file: asked for a list of strings
+the model sent a list of objects, putting raw `{'description': ...}` into a
+document meant to be signed. Structured arguments are now coerced to their
+meaningful text.
+
+Verified end to end — uploading the V-204 scan with *"draft an approval note
+from this"* routes to the Vision Agent, delegates to the Document Agent, and
+produces a 37 KB `.docx` containing **9 of 9 ground-truth details**, citing
+the scan as its source, with no placeholder text.
 
 ### Reading scanned documents
 
