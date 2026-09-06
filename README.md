@@ -217,7 +217,7 @@ the result back to the model, and answering.
 | Agent | Model | Tools |
 | --- | --- | --- |
 | **Reasoning Agent** | `qwen2.5:7b` | `search_knowledge_base`, `ask_coder_agent` |
-| **Coder Agent** | `qwen2.5-coder:7b` | none (sandboxed execution is next) |
+| **Coder Agent** | `qwen2.5-coder:7b` | `execute_code` |
 
 Tool selection is **model-driven**, not keyword-matched: agents pass their tool
 schemas to the OpenAI-compatible `/v1/chat/completions` endpoint and the model
@@ -240,6 +240,70 @@ France?" produces no call at all.
 
 Adding a capability means registering it here and naming it in an agent's
 `allowed_tools`. There is no other way in.
+
+### Sandboxed code execution
+
+Code the Coder Agent writes is **always run before you see it**, in a Docker
+container that is denied almost everything:
+
+| Flag | What it denies |
+| --- | --- |
+| `--network=none` | No sockets. Executed code cannot become the hole in an air-gapped product. |
+| `--cap-drop ALL` | No Linux capabilities to escalate with. |
+| `--security-opt no-new-privileges` | A setuid binary is not a ladder to root. |
+| `--read-only` | The root filesystem cannot be modified for a later run. |
+| `tmpfs /tmp` (noexec, nosuid, nodev) | Scratch space that cannot be used to write and run a payload. |
+| `--memory 256m` | A runaway allocation hits a wall. |
+| `--pids-limit 50` | Caps process creation. |
+| `user 65534` | Unprivileged even inside the container. |
+
+Every one of these was verified rather than assumed:
+
+```
+socket to 1.1.1.1:80   → OSError: [Errno 101] Network is unreachable
+DNS lookup             → gaierror
+urllib fetch           → URLError
+write to /usr/lib      → OSError: [Errno 30] Read-only file system
+write to /tmp          → succeeds (scratch space works)
+os.getuid()            → 65534
+infinite loop          → killed, timed_out=True
+```
+
+`Dockerfile.sandbox` installs nothing beyond `python:3.12-slim`. Build it once:
+
+```bash
+docker build -f Dockerfile.sandbox -t drishti-sandbox:latest .
+```
+
+**Verification is deterministic, not model-driven.** `qwen2.5-coder:7b` does
+not emit real tool calls — Ollama advertises the `tools` capability for it, but
+it writes the tool-call JSON into its reply as text (0 real calls in 3
+attempts). So the Coder Agent extracts the code the model wrote and runs it
+unconditionally. That matches the requirement better than a tool call would:
+code is *always* checked, not checked whenever the model remembers to ask.
+Execution still goes through `tool_registry.call`, so the whitelist and the
+central log entry apply exactly as for a model-initiated call.
+
+On failure it corrects **exactly once**, then reports honestly. The limit is
+enforced by the loop, not requested in the prompt — and both runs are shown in
+the UI, because hiding a failed first attempt would make a retry look like a
+first-time success. `tests/test_coder_correction.py` covers all four paths
+with a stubbed model and a real sandbox.
+
+### Logs hold metadata, never content
+
+`sandbox.log` records a hash of the code, exit code, duration and output sizes
+— never the code or its output. `tools.log` redacts the `code` argument the
+same way, using **the same hash**, so the two entries correlate without either
+file holding the content:
+
+```
+tools.log    agent=Coder Agent | tool=execute_code | args={"code": "<sha256=a84bb123…, 142 chars>"} | result=exit=0 stdout=34B
+sandbox.log  sha256=a84bb123… | exit_code=0 | timed_out=False | duration=0.097s | stdout_bytes=34
+```
+
+A log that accumulates arbitrary model-written code and arbitrary program
+output is a liability, not an audit trail.
 
 ### Delegation
 
