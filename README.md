@@ -60,6 +60,8 @@ drishti-workbench/
 │   │   ├── services/   model_client.py    — engine-agnostic inference client
 │   │   │                router.py          — rule-based task classifier
 │   │   │                knowledge_base.py  — chunking, embedding, retrieval
+│   │   ├── agents/     base_agent.py, reasoning_agent.py, coding_agent.py,
+│   │   │                tool_registry.py — the only route to a tool
 │   │   ├── core/       outbound.py — counts every attempted HTTP request
 │   │   ├── data/       sample_docs/ (committed), chroma/ (gitignored)
 │   │   └── scripts/    ingest_samples.py, traffic_monitor.py
@@ -205,6 +207,80 @@ event: done                       ← client must close(); EventSource otherwise
 `model` is optional on both routes. Omit it and the router chooses; supply it
 to override (the router still classifies, so `router.log` records what it
 would have picked).
+
+## Agents
+
+An agent is a name, a bound model, a system prompt and a **whitelist of tool
+names**. It owns its turn: deciding whether to use a tool, running it, feeding
+the result back to the model, and answering.
+
+| Agent | Model | Tools |
+| --- | --- | --- |
+| **Reasoning Agent** | `qwen2.5:7b` | `search_knowledge_base`, `ask_coder_agent` |
+| **Coder Agent** | `qwen2.5-coder:7b` | none (sandboxed execution is next) |
+
+Tool selection is **model-driven**, not keyword-matched: agents pass their tool
+schemas to the OpenAI-compatible `/v1/chat/completions` endpoint and the model
+decides. "What is the shutdown procedure for the FCC unit?" produces a
+`search_knowledge_base` call with the query it chose; "What is the capital of
+France?" produces no call at all.
+
+### Everything goes through the registry
+
+`app/agents/tool_registry.py` is the only route to a tool. Agents hold tool
+*names*, never function references, and every invocation passes through
+`call()`. That indirection buys three things that direct calls cannot:
+
+- **one place** where every call is logged;
+- **whitelist enforcement at the point of invocation** — the model picks the
+  tool name, so a model reaching outside its permitted set is exactly what
+  needs catching, and catching it in the caller would mean trusting the caller;
+- uniform handling of malformed arguments, which are returned to the model as
+  a tool result so it can correct itself rather than ending the turn.
+
+Adding a capability means registering it here and naming it in an agent's
+`allowed_tools`. There is no other way in.
+
+### Delegation
+
+The Reasoning Agent is instructed **not to write code**. A coding sub-question
+goes to `ask_coder_agent`, which runs `CoderAgent.run()` and returns its
+answer. Without that instruction the reasoning model simply answers coding
+requests itself and the specialist never earns its place.
+
+Delegation is capped at one level by an explicit depth counter, not by relying
+on CoderAgent happening to have no tools today.
+
+### Two honest limitations
+
+**The rule-based router acts before the agent does.** A mixed request
+containing the word "python" is classified as `coding` and sent straight to the
+Coder Agent, so the Reasoning Agent never sees it and cannot delegate.
+Delegation therefore only fires on mixed requests that do *not* trip the
+coding classifier. These are two different mechanisms and the router wins
+first.
+
+**qwen2.5:7b's multi-step tool discipline is imperfect.** When the document
+lookup comes first in a mixed request, the model frequently finishes the
+coding part itself instead of making a second tool call — even when explicitly
+instructed not to. Delegation is reliable when the coding ask comes first
+(*"Build me a helper that flags an out-of-range reading. Separately, what does
+the SOP say about oxygen limits?"* calls both tools). A larger model on the
+GPU server should behave better; this is a model-capability limit, not a
+plumbing failure.
+
+### Audit logs
+
+Three files under `backend/logs/`, one concern each:
+
+```
+router.log      task=reasoning | reason=no coding or vision signals matched | message="…"
+tools.log       agent=Reasoning Agent | tool=ask_coder_agent | args={…} | result=delegated; 772 char reply
+delegation.log  from=Reasoning Agent | to=Coder Agent | ASKED | question="…"
+```
+
+All three use `WatchedFileHandler`, so rotating or deleting a log while the
+server runs does not silently send every later entry into a deleted inode.
 
 ## Task routing
 
