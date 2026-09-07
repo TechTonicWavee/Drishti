@@ -17,7 +17,8 @@ streaming POST:
 
 Frames on the wire:
 
-    event: routing        one per turn, always first — which agent was picked
+    event: thread         one per turn, first — the thread this turn belongs to
+    event: routing        which agent was picked
     event: tool           a tool ran; carries its short summary
     event: sources        documents the answer is grounded in
     event: execution      code was run in the sandbox; carries its real output
@@ -55,9 +56,11 @@ from app.agents.vision_agent import (
     PDF_SUFFIXES,
     VisionAgent,
 )
+from app.services import thread_service
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
 from app.core.config import settings
+from app.services.memory_service import DEMO_USER
 from app.services.router import Task, classify
 
 router = APIRouter(tags=["chat"])
@@ -81,6 +84,8 @@ class HistoryTurn(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    # Omit to start a new thread; supply to continue an existing one.
+    thread_id: str | None = None
     # Prior turns, replayed so follow-ups like "and what about step 3?"
     # resolve. Bounded again server-side; see base_agent.history_messages.
     history: list[HistoryTurn] = Field(default_factory=list)
@@ -136,7 +141,31 @@ async def _sse_events(
     client: ModelServingClient,
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
+    thread_id: str | None = None,
 ) -> AsyncIterator[str]:
+    # Resolve the thread before anything else, so the client can attach
+    # subsequent turns to it even if this one fails partway through.
+    resumed = bool(thread_id) and thread_service.thread_exists(thread_id or "")
+    if resumed and thread_id:
+        prior = thread_service.get_thread_messages(thread_id)
+        thread_service.note_resumed(thread_id, DEMO_USER, len(prior))
+        # The stored transcript is authoritative; a client-supplied history
+        # could be stale or edited, and the database already has the truth.
+        history = thread_service.history_for_model(
+            thread_id, settings.max_history_messages
+        )
+    else:
+        thread_id = await thread_service.create_thread(
+            DEMO_USER,
+            message or attachment_name or "New conversation",
+            client=client,
+        )
+
+    yield _sse({"thread_id": thread_id, "resumed": resumed}, event="thread")
+
+    if message.strip():
+        thread_service.add_message(thread_id, "user", message)
+
     route = _choose(message, override, has_attachment, attachment_name, client)
 
     # Always first, so the UI can label the answer before any token arrives.
@@ -156,11 +185,16 @@ async def _sse_events(
         agent_context["attachment_path"] = str(attachment_path)
         agent_context["attachment_name"] = attachment_name
 
+    answer: list[str] = []
+    tools_used: list[str] = []
+
     try:
         async for event in route.agent.run_stream(message, agent_context):
             if isinstance(event, Delta):
+                answer.append(event.text)
                 yield _sse({"delta": event.text})
             elif isinstance(event, ToolUse):
+                tools_used.append(event.tool)
                 yield _sse(
                     {"tool": event.tool, "summary": event.summary, "ok": event.ok},
                     event="tool",
@@ -194,6 +228,15 @@ async def _sse_events(
         # tell a model failure from a dropped socket.
         yield _sse({"message": str(exc)}, event="stream-error")
     finally:
+        # Persist whatever was produced, even on a failed turn: a partial
+        # answer the user saw should still be in the transcript they reopen.
+        text = "".join(answer).strip()
+        if text:
+            summary = route.agent_name
+            if tools_used:
+                summary += " · " + ", ".join(dict.fromkeys(tools_used))
+            thread_service.add_message(thread_id, "assistant", text, summary)
+
         # EventSource reconnects automatically when a stream ends, so the
         # client needs an explicit signal telling it to close the connection.
         yield _sse({}, event="done")
@@ -207,11 +250,12 @@ def _stream(
     client: ModelServingClient,
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
+    thread_id: str | None = None,
 ) -> StreamingResponse:
     return StreamingResponse(
         _sse_events(
             message, override, has_attachment, attachment_name, client,
-            attachment_path, history,
+            attachment_path, history, thread_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -237,6 +281,7 @@ async def chat(
         request.attachment_name,
         client,
         history=[turn.model_dump() for turn in request.history],
+        thread_id=request.thread_id,
     )
 
 
@@ -249,6 +294,9 @@ async def chat_stream(
     history: str | None = Query(
         default=None,
         description="JSON array of prior {role, content} turns.",
+    ),
+    thread_id: str | None = Query(
+        default=None, description="Continue this thread; omit to start one."
     ),
     client: ModelServingClient = Depends(get_model_client),
 ) -> StreamingResponse:
@@ -268,7 +316,8 @@ async def chat_stream(
         except json.JSONDecodeError:
             turns = []
     return _stream(
-        message, model, has_attachment, attachment_name, client, history=turns
+        message, model, has_attachment, attachment_name, client,
+        history=turns, thread_id=thread_id,
     )
 
 
@@ -340,6 +389,7 @@ async def chat_upload(
     file: UploadFile = File(...),
     message: str = Form(default=""),
     history: str = Form(default=""),
+    thread_id: str = Form(default=""),
     client: ModelServingClient = Depends(get_model_client),
 ) -> StreamingResponse:
     """Accept an image or PDF and stream the vision agent's reading of it.
@@ -364,4 +414,5 @@ async def chat_upload(
         client,
         attachment_path=saved,
         history=turns,
+        thread_id=thread_id or None,
     )
