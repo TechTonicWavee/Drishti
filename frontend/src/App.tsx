@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import AirGapBadge from '@/components/AirGapBadge'
 import Chat from '@/components/Chat'
 import KnowledgeBase from '@/components/KnowledgeBase'
+import ThreadSidebar, { type ThreadSidebarHandle } from '@/components/ThreadSidebar'
 import { ApiError, fetchHealth, type Health } from '@/lib/api'
 
 type Status =
@@ -36,10 +37,31 @@ export default function App() {
 
   const recheck = useCallback(() => setAttempt((n) => n + 1), [])
 
+  // The conversation currently open. null is a fresh, unsaved one.
+  const [threadId, setThreadId] = useState<string | null>(null)
+  const sidebarRef = useRef<ThreadSidebarHandle>(null)
+
+  // Refresh the list after each turn, so a new thread and the title the model
+  // generated for it appear without polling.
+  const onTurnEnd = useCallback(() => sidebarRef.current?.refresh(), [])
+  const newChat = useCallback(() => setThreadId(null), [])
+
   return (
-    <main className="min-h-dvh px-6 py-16 sm:py-24">
+    <div className="flex min-h-dvh">
       <AirGapBadge />
 
+      {/* Sticky so the conversation list stays put while the transcript
+          scrolls — the list is navigation, not part of the document. */}
+      <div className="sticky top-0 hidden h-dvh md:block">
+        <ThreadSidebar
+          ref={sidebarRef}
+          activeThreadId={threadId}
+          onSelect={setThreadId}
+          onNewChat={newChat}
+        />
+      </div>
+
+      <main className="min-w-0 flex-1 px-6 py-16 sm:py-24">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-12">
         <header className="flex flex-col gap-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -64,7 +86,11 @@ export default function App() {
         <KnowledgeBase />
 
         <div className="border-t border-border pt-10">
-          <Chat />
+          <Chat
+            threadId={threadId}
+            onThreadId={setThreadId}
+            onTurnEnd={onTurnEnd}
+          />
         </div>
 
         <footer className="border-t border-border pt-6 text-[12px] leading-relaxed text-muted-foreground">
@@ -76,7 +102,8 @@ export default function App() {
           to verify it.
         </footer>
       </div>
-    </main>
+      </main>
+    </div>
   )
 }
 
