@@ -6,6 +6,10 @@ import KnowledgeBase from '@/components/KnowledgeBase'
 import ThreadSidebar, { type ThreadSidebarHandle } from '@/components/ThreadSidebar'
 import { ApiError, fetchHealth, type Health } from '@/lib/api'
 
+// Often enough that a dead backend is obvious within a demo beat, rarely
+// enough to be invisible in the network log.
+const HEALTH_POLL_MS = 10_000
+
 type Status =
   | { kind: 'checking' }
   | { kind: 'connected'; health: Health }
@@ -15,24 +19,42 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ kind: 'checking' })
   const [attempt, setAttempt] = useState(0)
 
+  // Polled, not checked once. A one-shot check goes on displaying "Backend
+  // connected" long after the backend has died — which is exactly when the
+  // indicator matters, and is how a dead server looked healthy while every
+  // request beneath it failed.
   useEffect(() => {
     const controller = new AbortController()
-    setStatus({ kind: 'checking' })
+    let cancelled = false
+    setStatus((current) =>
+      current.kind === 'checking' ? current : { kind: 'checking' },
+    )
 
-    fetchHealth(controller.signal)
-      .then((health) => setStatus({ kind: 'connected', health }))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return
-        setStatus({
-          kind: 'failed',
-          message:
-            error instanceof ApiError
-              ? error.message
-              : 'An unexpected error occurred while contacting the backend.',
+    const poll = () => {
+      fetchHealth(controller.signal)
+        .then((health) => {
+          if (!cancelled) setStatus({ kind: 'connected', health })
         })
-      })
+        .catch((error: unknown) => {
+          if (cancelled) return
+          if (error instanceof DOMException && error.name === 'AbortError') return
+          setStatus({
+            kind: 'failed',
+            message:
+              error instanceof ApiError
+                ? error.message
+                : 'An unexpected error occurred while contacting the backend.',
+          })
+        })
+    }
 
-    return () => controller.abort()
+    poll()
+    const timer = setInterval(poll, HEALTH_POLL_MS)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(timer)
+    }
   }, [attempt])
 
   const recheck = useCallback(() => setAttempt((n) => n + 1), [])
