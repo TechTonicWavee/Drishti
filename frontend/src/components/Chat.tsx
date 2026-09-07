@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import AgentTrace, { type TraceStep } from '@/components/AgentTrace'
 import Markdown from '@/components/Markdown'
+import {
+  ensureSession,
+  touchSession,
+  watchPageExit,
+} from '@/lib/session'
 
 /**
  * The chat surface.
@@ -137,6 +142,15 @@ export default function Chat() {
   // Don't leave a socket open if the component goes away mid-answer.
   useEffect(() => () => sourceRef.current?.close(), [])
 
+  // A session bracket, so the backend knows when to extract durable facts.
+  // Only the user's own turns are handed over; the server filters again.
+  useEffect(() => {
+    ensureSession()
+    return watchPageExit(() =>
+      messagesRef.current.map((m) => ({ role: m.role, content: m.content })),
+    )
+  }, [])
+
   const applyEvent = useCallback(
     (name: string, data: string) => {
       try {
@@ -183,6 +197,10 @@ export default function Chat() {
 
   const startTurn = useCallback((userText: string) => {
     setError(null)
+    ensureSession()
+    touchSession(() =>
+      messagesRef.current.map((m) => ({ role: m.role, content: m.content })),
+    )
     // A second's grace: log timestamps have second resolution, so a step
     // written in the same second the turn began would otherwise be missed.
     turnStartRef.current = Date.now() / 1000 - 1
