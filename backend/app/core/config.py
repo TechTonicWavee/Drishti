@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # memory rather than after.
     max_upload_bytes: int = 25 * 1024 * 1024
 
+    # Ask the model for a short thread title instead of truncating the first
+    # message. Better titles, at the cost of one extra call on the first turn
+    # of a conversation; turn it off to save that latency.
+    thread_titles_from_model: bool = True
+
     # Prior turns replayed to the model so follow-up questions resolve. Kept
     # small on purpose: the whole history is re-sent with every request, and a
     # long one both slows generation and crowds out retrieved context.
