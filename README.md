@@ -59,6 +59,7 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Follow-up questions within a conversation (recent turns replayed) | ✅ |
 | Knowledge base management from the UI — add, list, remove documents | ✅ |
 | Cross-session memory of the user, with structural RAG isolation | ✅ |
+| Persistent conversation threads with a sidebar — resume any past chat | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
@@ -78,9 +79,6 @@ the repository today.**
 - **Hardware tiers.** Model choice is currently one setting for one machine.
   A real rollout wants a small tier for a laptop and a larger tier for the
   GPU server, selected by profile.
-- **Saved conversation threads.** Follow-ups work within a session and durable
-  facts persist across sessions, but the transcript itself is not saved: reload
-  the page and the conversation is gone. There is no thread list.
 - **Per-authenticated-user memory.** Memory is keyed by `user_id`, but every
   session currently uses the hardcoded `demo_user`, so on a shared plant
   terminal all operators would share one memory. The schema is ready; the login
@@ -589,6 +587,48 @@ The language clause is load-bearing. Qwen2.5 drifts into Chinese when a prompt
 does not establish a language — "Name two products made in an oil refinery"
 reliably came back in Chinese before this was added. A caller that supplies
 its own system message still wins, so the default only fills a gap.
+
+## Conversation threads
+
+Every turn is saved to a thread in `backend/data/memory.db`. The sidebar lists
+them newest first with a model-generated title; clicking one loads the full
+transcript and continues it with the stored history replayed to the model.
+
+**Threads and user memory are separate and must stay that way.** Threads hold
+the conversation verbatim, for reopening and reading, and grow with use.
+`user_memory` holds a handful of extracted facts, bounded, injected into every
+prompt. Whole transcripts in a prompt would drown retrieved procedures; facts
+alone would leave nothing to reopen. They share a SQLite file and nothing else.
+
+```bash
+curl "http://localhost:8000/threads?user_id=demo_user"
+curl "http://localhost:8000/threads/<id>/messages"
+```
+
+Creation and resumption are recorded in `backend/logs/threads.log` — ids and
+counts, never message content.
+
+### A caution for the demo
+
+While testing threads, a follow-up question — *"and what is the hydrogen
+sulphide limit?"* — was answered **without retrieval being called at all**, and
+the model wrote a fabricated citation to match:
+
+> the acceptable limit … is **10 ppm** … Document: HYDROGEN SULFIDE (H2S)
+> EXPOSURE CONTROL PROCEDURE, **SAMPLE-SOP-HSE-022, Revision 3**
+
+The real SOP says **below 5 ppm**, and `SAMPLE-SOP-HSE-022` does not exist. A
+limit twice as permissive as the procedure, under an invented document number,
+in a confined-space safety answer.
+
+The prompt now forbids writing any document reference that did not come from a
+search result, and states that a follow-up needs its own search. Asked
+standalone, the same question returns 5 ppm citing the correct document, so the
+retrieval path is sound — the failure was skipping it.
+
+**Trust the Sources card, not prose.** The card is populated only from actual
+retrieval results. A "Reference:" section inside the answer text is written by
+the model and is not verified against anything.
 
 ## Memory of the user
 
