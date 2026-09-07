@@ -35,3 +35,9 @@ backend/data/uploads/
 
 # Generated deliverables (runtime artefact)
 backend/data/generated/
+
+# Conversation transcripts and user memory (runtime, private)
+backend/data/memory.db
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/*.db-wal
