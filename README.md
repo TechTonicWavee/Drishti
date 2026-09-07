@@ -58,6 +58,7 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Agent trace in the UI, read back from the audit logs | ✅ |
 | Follow-up questions within a conversation (recent turns replayed) | ✅ |
 | Knowledge base management from the UI — add, list, remove documents | ✅ |
+| Cross-session memory of the user, with structural RAG isolation | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
@@ -77,11 +78,13 @@ the repository today.**
 - **Hardware tiers.** Model choice is currently one setting for one machine.
   A real rollout wants a small tier for a laptop and a larger tier for the
   GPU server, selected by profile.
-- **Saved conversation threads.** Follow-ups work within a session, but
-  nothing is persisted: reload the page and the conversation is gone. There is
-  no thread list and no stored per-person memory — the latter needs auth
-  first, since with no login there is no "person" to attach memory to, and on
-  a shared plant terminal it would blend different operators' context.
+- **Saved conversation threads.** Follow-ups work within a session and durable
+  facts persist across sessions, but the transcript itself is not saved: reload
+  the page and the conversation is gone. There is no thread list.
+- **Per-authenticated-user memory.** Memory is keyed by `user_id`, but every
+  session currently uses the hardcoded `demo_user`, so on a shared plant
+  terminal all operators would share one memory. The schema is ready; the login
+  is not.
 - **Concurrency.** The agent trace correlates by time window because the logs
   carry no request id; under simultaneous users a trace would collect its
   neighbours' steps. Threading a request id through every log line fixes it.
@@ -586,6 +589,68 @@ The language clause is load-bearing. Qwen2.5 drifts into Chinese when a prompt
 does not establish a language — "Name two products made in an oil refinery"
 reliably came back in Chinese before this was added. A caller that supplies
 its own system message still wins, so the default only fills a gap.
+
+## Memory of the user
+
+Durable facts about the person — role, team, ongoing projects, stated
+preferences — persist across sessions in SQLite at `backend/data/memory.db`.
+It is an extraction layer over the existing model, not a new one: qwen2.5:7b
+reads what the user typed and returns structured facts.
+
+```
+session ends  →  filter to user-authored turns  →  extract facts (qwen2.5:7b)
+              →  reject any overlapping an indexed document  →  store
+next session  →  facts prepended to the system prompt
+```
+
+Extraction runs on an explicit end-of-session signal from the browser — three
+minutes idle, or the page going away via `sendBeacon` — rather than a
+server-side guess, because a memory written from half a conversation is worse
+than none.
+
+### Document content cannot reach memory
+
+Two independent layers, both tested in
+[`tests/test_memory_privacy.py`](backend/tests/test_memory_privacy.py):
+
+1. **Structural.** `extract_memory` accepts only `UserUtterance`, and the sole
+   way to construct one is `user_utterances()`, which keeps messages whose role
+   is exactly `user`. A system message carrying retrieved SOP excerpts, a tool
+   message holding a document chunk, or an assistant turn quoting one **cannot
+   be passed in** — there is no code path that builds a `UserUtterance` from
+   them. The signature is the enforcement, not a comment asking callers to be
+   careful.
+2. **Overlap guard.** Any extracted fact sharing an eight-word verbatim span
+   with an indexed document is discarded and logged as a rejection. This covers
+   what the first layer cannot see: a user pasting a procedure into their own
+   message.
+
+Verified against a conversation whose system and tool messages contained
+"730 degrees Celsius", "purge the reactor with steam for four hours" and
+"cool at 30 degrees Celsius per hour" — the stored facts were *process
+engineer*, *FCC revamp project on Unit 3*, *prefers short answers in SI units*,
+and nothing else.
+
+### A known limitation
+
+When a single message is dominated by pasted procedure text, qwen2.5:7b
+suppresses the **whole** message and extracts nothing — losing the personal
+fact stated alongside it. Two rounds of prompt tuning did not shift it. The
+failure is in the safe direction (nothing leaks) but recall suffers, and the
+overlap guard never gets a chance to do its narrower job. A larger model on the
+GPU server should handle the mixed case better.
+
+### Endpoints
+
+```bash
+curl http://localhost:8000/memory/demo_user          # inspect stored facts
+curl -X DELETE http://localhost:8000/memory/demo_user  # forget everything
+```
+
+`demo_user` is hardcoded because there is no login yet. The tables are keyed by
+`user_id` so that becomes the authenticated subject when RBAC lands, changing
+callers rather than storage. Every extraction and retrieval is recorded in
+`backend/logs/memory.log`.
 
 ## Proving the air gap
 
