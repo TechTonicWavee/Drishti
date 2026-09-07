@@ -102,9 +102,13 @@ async def _model_title(first_message: str, client: ModelServingClient) -> str | 
                     "role": "system",
                     "content": (
                         "Write a title of four to six words for a conversation "
-                        "that opens with the message below. Reply with the "
-                        "title only: no quotes, no punctuation at the end, no "
-                        "explanation."
+                        "that opens with the message below.\n"
+                        "- Use ordinary words separated by spaces, as a person "
+                        "would write a heading.\n"
+                        "- Never use underscores, camelCase, or a filename or "
+                        "variable style.\n"
+                        "- Reply with the title only: no quotes, no trailing "
+                        "punctuation, no explanation."
                     ),
                 },
                 {"role": "user", "content": first_message[:500]},
@@ -114,9 +118,16 @@ async def _model_title(first_message: str, client: ModelServingClient) -> str | 
         return None
 
     title = " ".join((reply.get("content") or "").split()).strip(" \"'.")
-    # A model that ignored the instruction and wrote a sentence is worse than
-    # the truncation fallback, so an over-long reply is rejected outright.
+
+    # Reject anything that is not prose. A model that ignored the instruction
+    # is worse than the truncation fallback, so these fall through to it
+    # rather than being cleaned up into something half-right.
     if not title or len(title) > TITLE_MAX_CHARS:
+        return None
+    if "_" in title or len(title.split()) < 2:
+        # Observed in practice: "acceptable_oxygen_range" — an identifier, not
+        # a heading. It passed the length check and looked like a title to the
+        # code while looking like nothing anyone would write to a reader.
         return None
     return title
 
