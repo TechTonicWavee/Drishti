@@ -75,7 +75,16 @@ type Message = {
   trace?: TraceStep[]
 }
 
-export default function Chat() {
+type ChatProps = {
+  /** Thread to display. null means a fresh, unsaved conversation. */
+  threadId: string | null
+  /** Called when the backend assigns a thread to this turn. */
+  onThreadId: (threadId: string) => void
+  /** Called when a turn finishes, so the sidebar can refresh. */
+  onTurnEnd: () => void
+}
+
+export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [override, setOverride] = useState<string>(AUTO)
@@ -83,6 +92,10 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null)
 
   const sourceRef = useRef<EventSource | null>(null)
+  // The thread this panel is currently showing. Tracked separately from the
+  // prop so a thread created mid-turn does not look like a sidebar click and
+  // reload the conversation out from under the user.
+  const ownThreadRef = useRef<string | null>(null)
   // When the current turn began, in unix seconds — the window the trace asks
   // the backend for.
   const turnStartRef = useRef<number>(0)
@@ -137,10 +150,61 @@ export default function Chat() {
     sourceRef.current = null
     setStreaming(false)
     void loadTrace()
-  }, [loadTrace])
+    onTurnEnd()
+  }, [loadTrace, onTurnEnd])
 
   // Don't leave a socket open if the component goes away mid-answer.
   useEffect(() => () => sourceRef.current?.close(), [])
+
+  // Load a transcript when the sidebar selects a different thread. Skipped
+  // when the id is one this panel just created, which is not a navigation.
+  useEffect(() => {
+    if (threadId === ownThreadRef.current) return
+    ownThreadRef.current = threadId
+
+    if (!threadId) {
+      setMessages([])
+      setError(null)
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch(`/api/threads/${threadId}/messages`)
+        if (!response.ok) throw new Error(String(response.status))
+        const stored = (await response.json()) as {
+          role: string
+          content: string
+          agent_trace_summary: string | null
+        }[]
+        if (cancelled) return
+        setMessages(
+          stored.map((m) => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content,
+            // Reconstructed from the stored summary: the live routing frame
+            // is long gone, but the label it produced was saved with the turn.
+            routing: m.agent_trace_summary
+              ? {
+                  task: '',
+                  agent: m.agent_trace_summary.split(' · ')[0],
+                  model: null,
+                  reason: m.agent_trace_summary,
+                  implemented: true,
+                }
+              : undefined,
+          })),
+        )
+        setError(null)
+      } catch {
+        if (!cancelled) setError('Could not load that conversation.')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [threadId])
 
   // A session bracket, so the backend knows when to extract durable facts.
   // Only the user's own turns are handed over; the server filters again.
@@ -156,6 +220,14 @@ export default function Chat() {
       try {
         const payload = JSON.parse(data)
         switch (name) {
+          case 'thread': {
+            const id = payload.thread_id as string
+            if (id && id !== ownThreadRef.current) {
+              ownThreadRef.current = id
+              onThreadId(id)
+            }
+            break
+          }
           case 'routing':
             patchLast((m) => ({ ...m, routing: payload as Routing }))
             break
@@ -192,7 +264,7 @@ export default function Chat() {
         // A single unparseable frame is not worth killing the stream over.
       }
     },
-    [patchLast],
+    [onThreadId, patchLast],
   )
 
   const startTurn = useCallback((userText: string) => {
@@ -227,13 +299,17 @@ export default function Chat() {
       // No model parameter on "Auto" — the router decides.
       const params = new URLSearchParams({ message: prompt })
       if (override !== AUTO) params.set('model', override)
-      if (prior.length) params.set('history', JSON.stringify(prior))
+      if (ownThreadRef.current) params.set('thread_id', ownThreadRef.current)
+      // Only needed before a thread exists; afterwards the stored transcript
+      // is authoritative and the server ignores this.
+      else if (prior.length) params.set('history', JSON.stringify(prior))
 
       const source = new EventSource(`/api/chat/stream?${params}`)
       sourceRef.current = source
 
       for (const name of [
-        'routing', 'sources', 'tool', 'execution', 'artifact', 'stream-error',
+        'thread', 'routing', 'sources', 'tool', 'execution', 'artifact',
+        'stream-error',
       ]) {
         source.addEventListener(name, (e) =>
           applyEvent(name, (e as MessageEvent<string>).data),
@@ -269,7 +345,8 @@ export default function Chat() {
         const form = new FormData()
         form.append('file', file)
         if (note) form.append('message', note)
-        if (prior.length) form.append('history', JSON.stringify(prior))
+        if (ownThreadRef.current) form.append('thread_id', ownThreadRef.current)
+        else if (prior.length) form.append('history', JSON.stringify(prior))
 
         const response = await fetch('/api/chat/upload', { method: 'POST', body: form })
         if (!response.ok || !response.body) {
@@ -305,9 +382,10 @@ export default function Chat() {
       } finally {
         setStreaming(false)
         void loadTrace()
+        onTurnEnd()
       }
     },
-    [applyEvent, history, input, loadTrace, startTurn, streaming],
+    [applyEvent, history, input, loadTrace, onTurnEnd, startTurn, streaming],
   )
 
   return (
