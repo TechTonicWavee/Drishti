@@ -169,6 +169,8 @@ Do NOT extract:
 - One-off questions, or anything they asked rather than stated about themselves.
 - Guesses. If they did not say it, it is not a fact.
 
+A message may contain pasted procedure or document text alongside what the person said about themselves. Ignore the pasted part and still extract the personal facts from the same message — do not discard the whole message because part of it came from a document.
+
 If nothing durable was stated, return exactly: []
 
 Return only the JSON array, no other text."""
