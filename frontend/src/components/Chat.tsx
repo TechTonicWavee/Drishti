@@ -687,7 +687,11 @@ function UploadZone({
 
 function formatRouting(routing: Routing | undefined): string {
   if (!routing) return 'Routing…'
-  // model is null when the route was recognised but nothing was invoked.
-  const suffix = routing.model ? ` (${routing.model})` : ' — not yet implemented'
+  // "Not implemented" is what `implemented` means, not what a missing model
+  // means. A reopened turn has no model recorded — only the agent name saved
+  // with it — and reading that as unimplemented labelled every restored
+  // message in a thread as a feature that does not exist.
+  if (!routing.implemented) return `Routed to: ${routing.agent} — not yet implemented`
+  const suffix = routing.model ? ` (${routing.model})` : ''
   return `Routed to: ${routing.agent}${suffix}`
 }
