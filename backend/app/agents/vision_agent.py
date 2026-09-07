@@ -7,7 +7,13 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
 
-from app.agents.base_agent import Agent, AgentEvent, Delta, history_messages
+from app.agents.base_agent import (
+    Agent,
+    AgentEvent,
+    Delta,
+    history_messages,
+    workbench_prompt,
+)
 from app.core.config import settings
 from app.core.logs import get_file_logger
 from app.services import image_prep
@@ -187,7 +193,7 @@ class VisionAgent(Agent):
         conversation: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": f"{settings.system_prompt}\n\n{self.handoff_instructions}",
+                "content": f"{workbench_prompt()}\n\n{self.handoff_instructions}",
             },
             *history_messages(context),
             {

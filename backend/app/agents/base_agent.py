@@ -118,8 +118,8 @@ class Agent:
         Building one without it would silently drop the English-language rule.
         """
         if not self.instructions:
-            return settings.system_prompt
-        return f"{settings.system_prompt}\n\n{self.instructions}"
+            return workbench_prompt()
+        return f"{workbench_prompt()}\n\n{self.instructions}"
 
     async def run(self, message: str, context: dict[str, Any]) -> str:
         """Execute a turn and return the finished answer."""
@@ -316,6 +316,28 @@ def _as_artifact(record: dict[str, str]) -> Artifact | None:
 # Enough of the chunk to show which part of a document was used, without
 # reproducing the whole thing in the chat transcript.
 _EXCERPT_CHARS = 320
+
+
+def workbench_prompt() -> str:
+    """The base prompt plus anything remembered about this user.
+
+    Ordered deliberately: the workbench rules first, then who the assistant is
+    talking to, then — later, as tool results — any retrieved document
+    context. Memory describes the person and should colour how an answer is
+    pitched; it must never outrank a procedure that was actually retrieved.
+
+    A failure here is swallowed. Memory is an enhancement, and losing it
+    should degrade the answer's personalisation, not break the turn.
+    """
+    try:
+        from app.services.memory_service import get_user_context
+
+        context = get_user_context()
+    except Exception:
+        context = ""
+    if not context:
+        return settings.system_prompt
+    return f"{settings.system_prompt}\n\n{context}"
 
 
 def history_messages(context: dict[str, Any]) -> list[dict[str, str]]:
