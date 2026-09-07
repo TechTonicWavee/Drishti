@@ -11,7 +11,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import chat, documents, files, health, memory, system
+from app.routers import (
+    chat,
+    documents,
+    files,
+    health,
+    memory,
+    system,
+    threads,
+)
 from app.services.model_client import ModelServingClient
 
 
@@ -57,3 +65,4 @@ app.include_router(system.router)
 app.include_router(files.router)
 app.include_router(documents.router)
 app.include_router(memory.router)
+app.include_router(threads.router)
