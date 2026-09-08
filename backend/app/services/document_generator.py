@@ -94,19 +94,40 @@ def _destination(title: str, suffix: str, fallback: str) -> Path:
     return GENERATED_DIR / f"{_slug(title, fallback)}-{stamp}-{uuid.uuid4().hex[:6]}{suffix}"
 
 
-def _record(kind: str, path: Path, items: int) -> None:
+def _record(
+    kind: str,
+    path: Path,
+    items: int,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+) -> None:
     # Metadata only, consistent with the other audit logs: the document
     # content is in the document.
     log.info(
         "kind=%s | file=%s | items=%d | bytes=%d",
         kind, path.name, items, path.stat().st_size,
     )
+    try:
+        from app.services.audit_service import record_event
+
+        record_event(
+            "document_generated",
+            user_id or "demo_user",
+            f"{kind}: {path.name} ({items} item(s), {path.stat().st_size} bytes)",
+            thread_id=thread_id,
+            source_component="document_generator.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
 
 
 def generate_approval_note(
     findings: list[str],
     title: str,
     source_document: str,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
 ) -> str:
     """Build an approval note as .docx and return its path."""
     if not findings:
@@ -162,11 +183,17 @@ def generate_approval_note(
 
     path = _destination(title, ".docx", "approval-note")
     document.save(path)
-    _record("approval_note", path, len(findings))
+    _record("approval_note", path, len(findings), user_id, thread_id)
     return str(path)
 
 
-def generate_summary_deck(title: str, sections: list[dict[str, Any]]) -> str:
+def generate_summary_deck(
+    title: str,
+    sections: list[dict[str, Any]],
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+) -> str:
     """Build a summary deck as .pptx and return its path."""
     if not sections:
         raise DocumentGenerationError("A deck needs at least one section.")
@@ -206,11 +233,17 @@ def generate_summary_deck(title: str, sections: list[dict[str, Any]]) -> str:
 
     path = _destination(title, ".pptx", "summary-deck")
     presentation.save(path)
-    _record("summary_deck", path, len(sections))
+    _record("summary_deck", path, len(sections), user_id, thread_id)
     return str(path)
 
 
-def generate_calculation_sheet(title: str, steps: list[dict[str, Any]]) -> str:
+def generate_calculation_sheet(
+    title: str,
+    steps: list[dict[str, Any]],
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+) -> str:
     """Build an auditable calculation sheet as .xlsx and return its path."""
     if not steps:
         raise DocumentGenerationError("A calculation sheet needs at least one step.")
@@ -266,5 +299,5 @@ def generate_calculation_sheet(title: str, steps: list[dict[str, Any]]) -> str:
 
     path = _destination(title, ".xlsx", "calculation-sheet")
     workbook.save(path)
-    _record("calculation_sheet", path, len(steps))
+    _record("calculation_sheet", path, len(steps), user_id, thread_id)
     return str(path)

@@ -413,7 +413,8 @@ async def _generate_approval_note(
 
     # Writing a file is blocking; a thread keeps the event loop free.
     path = await asyncio.to_thread(
-        generate_approval_note, list(findings), title, str(source)
+        generate_approval_note, list(findings), title, str(source),
+        user_id=context.get("user_id"), thread_id=context.get("thread_id"),
     )
     return _record_artifact(context, "approval_note", path)
 
@@ -423,7 +424,10 @@ async def _generate_summary_deck(
 ) -> str:
     from app.services.document_generator import generate_summary_deck
 
-    path = await asyncio.to_thread(generate_summary_deck, title, list(sections))
+    path = await asyncio.to_thread(
+        generate_summary_deck, title, list(sections),
+        user_id=context.get("user_id"), thread_id=context.get("thread_id"),
+    )
     return _record_artifact(context, "summary_deck", path)
 
 
@@ -432,7 +436,10 @@ async def _generate_calculation_sheet(
 ) -> str:
     from app.services.document_generator import generate_calculation_sheet
 
-    path = await asyncio.to_thread(generate_calculation_sheet, title, list(steps))
+    path = await asyncio.to_thread(
+        generate_calculation_sheet, title, list(steps),
+        user_id=context.get("user_id"), thread_id=context.get("thread_id"),
+    )
     return _record_artifact(context, "calculation_sheet", path)
 
 
