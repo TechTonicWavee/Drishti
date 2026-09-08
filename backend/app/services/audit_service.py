@@ -274,6 +274,24 @@ def verify_chain_integrity() -> dict[str, Any]:
                 "reason": f"row id gap: expected id {expected_next_id}, found {row['id']}",
             }
 
+        # The row's own claim about what preceded it must match what the walk
+        # actually found preceding it. Without this check, corrupting only
+        # the stored prev_hash column — leaving row_hash untouched — passes
+        # silently: row_hash was computed at insert time from the *correct*
+        # prev_hash, so recomputing with running_prev (which is also correct,
+        # since nothing upstream was touched) reproduces the same row_hash
+        # regardless of what the prev_hash column now says. Caught by this
+        # module's own test suite, which tampers prev_hash in isolation
+        # specifically to exercise this path.
+        if row["prev_hash"] != running_prev:
+            return {
+                "intact": False,
+                "total_rows": len(rows),
+                "first_break_at": row["id"],
+                "reason": "stored prev_hash does not match the hash of the "
+                          "row that actually precedes it",
+            }
+
         candidate = _row_hash(
             row["timestamp"], row["event_type"], row["user_id"], row["thread_id"],
             row["summary"], row["source_component"], running_prev,
@@ -284,7 +302,7 @@ def verify_chain_integrity() -> dict[str, Any]:
                 "total_rows": len(rows),
                 "first_break_at": row["id"],
                 "reason": "stored hash does not match recomputed hash "
-                          "(row content or prev_hash was altered)",
+                          "(row content was altered)",
             }
 
         running_prev = row["row_hash"]
