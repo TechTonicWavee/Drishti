@@ -102,11 +102,14 @@ async def call(
     """
     if name not in allowed:
         log.warning('agent=%s | tool=%s | DENIED (not in allowed list)', agent, name)
+        _audit(context, "tool_call", agent,
+               f"{name} DENIED — not in {agent}'s whitelist")
         raise ToolError(f"Agent '{agent}' is not permitted to use tool '{name}'.")
 
     tool = _REGISTRY.get(name)
     if tool is None:
         log.warning('agent=%s | tool=%s | DENIED (not registered)', agent, name)
+        _audit(context, "tool_call", agent, f"{name} DENIED — not registered")
         raise ToolError(f"No such tool: {name}")
 
     try:
@@ -115,10 +118,12 @@ async def call(
         # Almost always the model inventing an argument name.
         log.error('agent=%s | tool=%s | BAD ARGS %s | %s', agent, name,
                   _redact(arguments, tool.sensitive_args), exc)
+        _audit(context, "tool_call", agent, f"{name} FAILED — bad arguments")
         raise ToolError(f"Bad arguments for {name}: {exc}") from exc
     except Exception as exc:
         log.error('agent=%s | tool=%s | FAILED | %s: %s', agent, name,
                   type(exc).__name__, exc)
+        _audit(context, "tool_call", agent, f"{name} FAILED — {type(exc).__name__}")
         raise ToolError(f"{name} failed: {exc}") from exc
 
     log.info(
@@ -126,7 +131,32 @@ async def call(
         agent, name, _redact(arguments, tool.sensitive_args),
         tool.summarize(result),
     )
+    _audit(context, "tool_call", agent, f"{name} -> {tool.summarize(result)}")
     return result
+
+
+def _audit(context: dict[str, Any], event_type: str, agent: str, summary: str) -> None:
+    """Fold one of this module's own log lines into the cross-cutting trail.
+
+    Best-effort and silent on failure, deliberately: context may come from a
+    script or a test that never set user_id/thread_id, and losing one audit
+    row must never be the reason a tool call itself fails — the same
+    principle used elsewhere in this build wherever an enhancement sits next
+    to something load-bearing (see workbench_prompt's memory lookup, or the
+    thread sidebar's own refresh).
+    """
+    try:
+        from app.services.audit_service import record_event
+
+        record_event(
+            event_type,
+            context.get("user_id") or "demo_user",
+            f"{agent}: {summary}",
+            thread_id=context.get("thread_id"),
+            source_component="tool_registry.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed (tool call itself was unaffected): %s", exc)
 
 
 def _redact(arguments: dict[str, Any], sensitive: frozenset[str]) -> str:
@@ -208,6 +238,8 @@ async def _ask_coder_agent(*, context: dict[str, Any], question: str) -> str:
             'from=%s | to=Coder Agent | REFUSED (depth %s) | question="%s"',
             asker, depth, _preview(question),
         )
+        _audit(context, "delegation", asker,
+               f"-> Coder Agent REFUSED (depth {depth})")
         raise ToolError("Delegation depth exceeded; answer directly instead.")
 
     client = context.get("client")
@@ -217,6 +249,8 @@ async def _ask_coder_agent(*, context: dict[str, Any], question: str) -> str:
     delegation_log.info(
         'from=%s | to=Coder Agent | ASKED | question="%s"', asker, _preview(question)
     )
+    _audit(context, "delegation", asker,
+           f"-> Coder Agent: \"{_preview(question, 60)}\"")
 
     coder = CoderAgent(client)
     answer = await coder.run(
@@ -228,6 +262,8 @@ async def _ask_coder_agent(*, context: dict[str, Any], question: str) -> str:
         'from=%s | to=Coder Agent | ANSWERED | %d chars | reply="%s"',
         asker, len(answer), _preview(answer),
     )
+    _audit(context, "delegation", asker,
+           f"Coder Agent answered ({len(answer)} chars)")
     return answer
 
 
@@ -521,6 +557,8 @@ async def _ask_document_agent(*, context: dict[str, Any], request: str) -> str:
             'from=%s | to=Document Agent | REFUSED (depth %s) | request="%s"',
             asker, depth, _preview(request),
         )
+        _audit(context, "delegation", asker,
+               f"-> Document Agent REFUSED (depth {depth})")
         raise ToolError("Delegation depth exceeded; answer directly instead.")
 
     client = context.get("client")
@@ -541,6 +579,9 @@ async def _ask_document_agent(*, context: dict[str, Any], request: str) -> str:
         'from=%s | to=Document Agent | ASKED | request="%s" | findings=%d',
         asker, _preview(request), len(findings or []),
     )
+    _audit(context, "delegation", asker,
+           f"-> Document Agent: \"{_preview(request, 60)}\" "
+           f"({len(findings or [])} findings attached)")
 
     agent = DocumentAgent(client)
     answer = await agent.run(
@@ -551,6 +592,8 @@ async def _ask_document_agent(*, context: dict[str, Any], request: str) -> str:
     delegation_log.info(
         'from=%s | to=Document Agent | ANSWERED | %d chars', asker, len(answer)
     )
+    _audit(context, "delegation", asker,
+           f"Document Agent answered ({len(answer)} chars)")
     return answer
 
 
