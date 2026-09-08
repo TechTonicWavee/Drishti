@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import AirGapBadge from '@/components/AirGapBadge'
+import AuditView from '@/components/AuditView'
 import Chat from '@/components/Chat'
 import KnowledgeBase from '@/components/KnowledgeBase'
 import ThreadSidebar, { type ThreadSidebarHandle } from '@/components/ThreadSidebar'
@@ -68,6 +69,10 @@ export default function App() {
   const onTurnEnd = useCallback(() => sidebarRef.current?.refresh(), [])
   const newChat = useCallback(() => setThreadId(null), [])
 
+  // A tab, not a route: the audit trail is an admin/compliance view bolted
+  // onto the same page rather than a separate page, so it needs no router.
+  const [view, setView] = useState<'workbench' | 'audit'>('workbench')
+
   return (
     <div className="flex min-h-dvh">
       <AirGapBadge />
@@ -86,9 +91,29 @@ export default function App() {
       <main className="min-w-0 flex-1 px-6 py-16 sm:py-24">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-12">
         <header className="flex flex-col gap-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            MRPL · On-premise
-          </p>
+          <div className="flex items-baseline justify-between gap-4">
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              MRPL · On-premise
+            </p>
+            <nav className="flex gap-1 rounded-full border border-border bg-card p-0.5 text-[12px]">
+              {(['workbench', 'audit'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setView(tab)}
+                  aria-current={view === tab ? 'true' : undefined}
+                  className={[
+                    'rounded-full px-3 py-1.5 font-medium capitalize transition-colors',
+                    view === tab
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  ].join(' ')}
+                >
+                  {tab === 'audit' ? 'Audit log' : 'Workbench'}
+                </button>
+              ))}
+            </nav>
+          </div>
           <h1 className="font-heading text-4xl leading-tight sm:text-5xl">
             Drishti Workbench
           </h1>
@@ -105,15 +130,21 @@ export default function App() {
           <StatusLine status={status} onRetry={recheck} />
         </section>
 
-        <KnowledgeBase />
+        {view === 'audit' ? (
+          <AuditView />
+        ) : (
+          <>
+            <KnowledgeBase />
 
-        <div className="border-t border-border pt-10">
-          <Chat
-            threadId={threadId}
-            onThreadId={setThreadId}
-            onTurnEnd={onTurnEnd}
-          />
-        </div>
+            <div className="border-t border-border pt-10">
+              <Chat
+                threadId={threadId}
+                onThreadId={setThreadId}
+                onTurnEnd={onTurnEnd}
+              />
+            </div>
+          </>
+        )}
 
         <footer className="border-t border-border pt-6 text-[12px] leading-relaxed text-muted-foreground">
           Inference, retrieval, code execution and document generation all run
