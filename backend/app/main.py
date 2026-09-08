@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.routers import (
+    audit,
     chat,
     documents,
     files,
@@ -66,3 +67,4 @@ app.include_router(files.router)
 app.include_router(documents.router)
 app.include_router(memory.router)
 app.include_router(threads.router)
+app.include_router(audit.router)
