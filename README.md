@@ -60,6 +60,7 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Knowledge base management from the UI — add, list, remove documents | ✅ |
 | Cross-session memory of the user, with structural RAG isolation | ✅ |
 | Persistent conversation threads with a sidebar — resume any past chat | ✅ |
+| Tamper-evident cross-cutting audit trail, with a live verify + export UI | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
