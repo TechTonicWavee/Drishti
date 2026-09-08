@@ -630,6 +630,79 @@ retrieval path is sound — the failure was skipping it.
 retrieval results. A "Reference:" section inside the answer text is written by
 the model and is not verified against anything.
 
+## The audit trail
+
+Every feature already writes its own log — router.log, tools.log,
+delegation.log, vision.log, sandbox.log, documents.log, memory.log,
+threads.log — for debugging one feature at a time. `backend/data/audit.db`
+is different in kind: one cross-cutting timeline spanning all of them, built
+for "show me everything that happened, and prove nobody edited the record
+afterwards."
+
+### The hash chain
+
+Each row's `row_hash` is `SHA-256(this row's own fields + the previous row's
+row_hash)`. `verify_chain_integrity()` walks every row and recomputes it —
+checking, critically, that a row's *stored* `prev_hash` actually matches the
+hash of the row that precedes it, not just that `row_hash` recomputes
+correctly. That distinction mattered: an earlier version only checked the
+latter, which meant corrupting the stored `prev_hash` column alone — without
+touching `row_hash` — passed silently. `tests/test_audit_tamper.py` caught
+this by testing exactly that attack, and the check now closes it.
+
+```bash
+curl "http://localhost:8000/audit/verify"
+# {"intact": true, "total_rows": 10, "first_break_at": null, "reason": null}
+```
+
+Live-tested end to end: ran a document question, a coding task and a file
+upload through the real API, confirmed `audit.db` captured a `thread_created`,
+`route_decision`, and the feature-specific event (`tool_call`,
+`sandbox_execution`, `vision_extraction`) for each — 10 rows, `intact: true`.
+Then opened `sqlite3 data/audit.db` directly and edited one row's `summary`
+by hand:
+
+```
+before : intact=true,  total_rows=10, first_break_at=null
+after  : intact=false, total_rows=10, first_break_at=3,
+         reason="stored hash does not match recomputed hash (row content was altered)"
+```
+
+Exactly the tampered row, by id. `GET /audit/export?format=csv` produced a
+2,984-byte CSV that opened cleanly with Python's `csv` module, all 10 rows
+readable including the tampered one.
+
+### The honest limit — verified, not assumed
+
+Deleting `audit.db` outright while the backend is running raises **no
+exception anywhere** — confirmed experimentally before building around it, not
+assumed. A connection already open writes into the now-unlinked inode and
+reports success (real writes, unreachable by path, gone once the process
+exits); the next fresh connection — this module's own pattern, and every other
+service's in this codebase — finds no file, silently creates an empty one,
+and reports zero rows. `rm audit.db` erases the log more completely than
+editing any row in it, and `verify_chain_integrity()` alone cannot catch it:
+run against the freshly recreated file, it correctly reports `intact: true`,
+because the short chain that survives *is* internally consistent — that's
+true and also misses the point entirely.
+
+The defence is a watermark kept **outside** the database — `data/.audit_watermark`
+— recording the row count and hash this process last wrote. Every write
+compares the database's actual last row against it first; a mismatch is
+recorded as its own `audit_integrity_breach` event, naming what was expected
+versus what was found, rather than silently accepted as a fresh start.
+
+### Endpoints
+
+```bash
+curl "http://localhost:8000/audit/events?event_type=tool_call&limit=50"
+curl "http://localhost:8000/audit/verify"
+curl "http://localhost:8000/audit/export?format=csv" -o audit.csv
+```
+
+An **Audit log** tab in the UI wraps all three: a filterable table, a
+prominent Verify Integrity button, and an Export CSV link.
+
 ## Memory of the user
 
 Durable facts about the person — role, team, ongoing projects, stated
