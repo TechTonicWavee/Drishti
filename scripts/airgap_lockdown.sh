@@ -28,6 +28,23 @@ set -euo pipefail
 RULES_FILE="/var/tmp/drishti-airgap.conf"
 STATE_FILE="/var/tmp/drishti-airgap.state"
 DURATION=""
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Best-effort: an audit-trail write must never block a network safety
+# operation. The pf rules below are what actually enforce the lockdown either
+# way — this just makes the moment it happened show up next to every other
+# cross-cutting event, for the same "who did what, when" record.
+record_audit_event() {
+    local py="$REPO_ROOT/backend/.venv/bin/python"
+    [[ -x "$py" ]] || return 0
+    AUDIT_EVENT_TYPE="$1" AUDIT_SUMMARY="$2" "$py" -c "
+import os, sys
+sys.path.insert(0, '$REPO_ROOT/backend')
+from app.services.audit_service import record_event
+record_event(os.environ['AUDIT_EVENT_TYPE'], 'system', os.environ['AUDIT_SUMMARY'],
+             source_component='airgap_lockdown.sh')
+" 2>/dev/null || true
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -120,6 +137,9 @@ echo "Loading air-gap ruleset…"
 # /etc/pf.conf by the unlock script.
 pfctl -f "$RULES_FILE" 2>&1 | grep -v "^No ALTQ support" || true
 pfctl -e 2>&1 | grep -v "^No ALTQ support" || true
+
+record_audit_event "network_lockdown" \
+    "pf lockdown engaged${DURATION:+ (auto-unlock in ${DURATION}s)}"
 
 echo
 echo "🔒 AIR-GAP ACTIVE"

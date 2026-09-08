@@ -13,6 +13,21 @@ set -euo pipefail
 
 RULES_FILE="/var/tmp/drishti-airgap.conf"
 STATE_FILE="/var/tmp/drishti-airgap.state"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Best-effort, matching the lockdown script's own helper: an audit-trail
+# write must never block a network safety operation.
+record_audit_event() {
+    local py="$REPO_ROOT/backend/.venv/bin/python"
+    [[ -x "$py" ]] || return 0
+    AUDIT_EVENT_TYPE="$1" AUDIT_SUMMARY="$2" "$py" -c "
+import os, sys
+sys.path.insert(0, '$REPO_ROOT/backend')
+from app.services.audit_service import record_event
+record_event(os.environ['AUDIT_EVENT_TYPE'], 'system', os.environ['AUDIT_SUMMARY'],
+             source_component='airgap_unlock.sh')
+" 2>/dev/null || true
+}
 
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "This script must run as root (pf requires it):" >&2
@@ -51,6 +66,8 @@ else
 fi
 
 rm -f "$RULES_FILE" "$STATE_FILE"
+
+record_audit_event "network_unlock" "pf lockdown lifted, normal network access restored"
 
 echo
 echo "🔓 AIR-GAP LIFTED — normal network access restored."
