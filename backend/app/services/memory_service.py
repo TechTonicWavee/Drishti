@@ -194,6 +194,7 @@ async def extract_memory(
     text = "\n".join(f"- {u.text}" for u in utterances if u.text.strip())
     if not text.strip():
         log.info("user=%s | extraction skipped | no user-authored text", user_id)
+        _audit(user_id, "extraction skipped — no user-authored text", session_id)
         return []
 
     try:
@@ -206,6 +207,7 @@ async def extract_memory(
         )
     except ModelServingError as exc:
         log.error("user=%s | extraction failed | %s", user_id, exc)
+        _audit(user_id, f"extraction failed — {exc}", session_id)
         return []
 
     facts = _parse_facts(reply.get("content") or "")
@@ -225,12 +227,38 @@ async def extract_memory(
             "user=%s | session=%s | extracted %d fact(s) | %s",
             user_id, session_id or "-", len(kept), json.dumps(kept),
         )
+        summary = f"extracted {len(kept)} fact(s)"
     else:
         log.info(
             "user=%s | session=%s | nothing durable found",
             user_id, session_id or "-",
         )
+        summary = "nothing durable found"
+    if rejected:
+        summary += f"; rejected {len(rejected)} as document content"
+    _audit(user_id, summary, session_id)
     return kept
+
+
+def _audit(user_id: str, summary: str, session_id: str | None) -> None:
+    """Fold one memory_service outcome into the cross-cutting trail.
+
+    thread_id is deliberately left unset here: memory extraction is bracketed
+    by chat_sessions.session_id, a different concept from threads.thread_id
+    (a saved conversation transcript) — conflating the two would misattribute
+    an extraction to a thread it has no real relationship to. session_id is
+    still recorded, in the summary text, so the row remains traceable.
+    """
+    try:
+        from app.services.audit_service import record_event
+
+        record_event(
+            "memory_extracted", user_id,
+            f"{summary} (session={session_id or '-'})",
+            source_component="memory_service.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
 
 
 def _parse_facts(raw: str) -> list[dict[str, str]]:
@@ -371,6 +399,19 @@ def forget(user_id: str = DEMO_USER) -> int:
         )
         removed = cursor.rowcount
     log.info("user=%s | memory cleared | %d fact(s) removed", user_id, removed)
+    try:
+        from app.services.audit_service import record_event
+
+        # A separate event type from "memory_extracted": this is a deletion,
+        # not an extraction, and "who wiped stored memory, when" is exactly
+        # the kind of question a compliance reviewer asks that a merged event
+        # type would obscure.
+        record_event(
+            "memory_cleared", user_id, f"{removed} fact(s) removed",
+            source_component="memory_service.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
     return removed
 
 
