@@ -85,13 +85,23 @@ def _truncate(raw: bytes) -> str:
     return text[:MAX_OUTPUT_CHARS] + f"\n… truncated at {MAX_OUTPUT_CHARS} characters"
 
 
-def execute_code(code: str, timeout_seconds: int = 10) -> dict[str, Any]:
+def execute_code(
+    code: str,
+    timeout_seconds: int = 10,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
     """Run `code` in the sandbox and return what it produced.
 
     Returns {"stdout", "stderr", "exit_code", "timed_out"}. A crash in the
     executed code is a normal result reported through exit_code, not an
     exception — the caller wants to see the traceback. SandboxError is raised
     only when the sandbox itself is unavailable.
+
+    `user_id`/`thread_id` are optional and only used to attribute the audit
+    trail entry below; every direct call in tests and scripts (which have
+    neither) keeps working exactly as before.
     """
     client = _docker()
     digest = hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
@@ -171,6 +181,20 @@ def execute_code(code: str, timeout_seconds: int = 10) -> dict[str, Any]:
         "| stdout_bytes=%d | stderr_bytes=%d",
         digest, exit_code, timed_out, duration, len(stdout), len(stderr),
     )
+
+    try:
+        from app.services.audit_service import record_event
+
+        record_event(
+            "sandbox_execution",
+            user_id or "demo_user",
+            f"code {digest} -> exit={exit_code} timed_out={timed_out} "
+            f"({duration:.2f}s)",
+            thread_id=thread_id,
+            source_component="sandbox.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
 
     return {
         "stdout": stdout,

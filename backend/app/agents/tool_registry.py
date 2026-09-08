@@ -335,6 +335,8 @@ async def _execute_code(
         execute_code,
         code,
         max(1, min(int(timeout_seconds), MAX_SANDBOX_TIMEOUT)),
+        user_id=context.get("user_id"),
+        thread_id=context.get("thread_id"),
     )
 
 
