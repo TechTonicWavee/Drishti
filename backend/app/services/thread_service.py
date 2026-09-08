@@ -162,6 +162,15 @@ async def create_thread(
         "user=%s | thread=%s | CREATED | title_chars=%d | opening_chars=%d",
         user_id, thread_id, len(title), len(first_message),
     )
+    try:
+        from app.services.audit_service import record_event
+
+        record_event(
+            "thread_created", user_id, f'new thread "{title}"',
+            thread_id=thread_id, source_component="thread_service.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
     return thread_id
 
 
@@ -262,3 +271,16 @@ def note_resumed(thread_id: str, user_id: str, message_count: int) -> None:
         "user=%s | thread=%s | RESUMED | prior_messages=%d",
         user_id, thread_id, message_count,
     )
+    try:
+        from app.services.audit_service import record_event
+
+        # A distinct event type from "thread_created": reopening a
+        # conversation is a different action worth its own line, not a
+        # second creation.
+        record_event(
+            "thread_resumed", user_id,
+            f"resumed with {message_count} prior message(s)",
+            thread_id=thread_id, source_component="thread_service.py",
+        )
+    except Exception as exc:
+        log.warning("audit recording failed: %s", exc)
