@@ -111,9 +111,13 @@ def _choose(
     has_attachment: bool,
     attachment_name: str | None,
     client: ModelServingClient,
+    thread_id: str | None = None,
 ) -> Route:
     """Classify the turn and build the agent that will handle it."""
-    decision = classify(message, has_attachment, attachment_name)
+    decision = classify(
+        message, has_attachment, attachment_name,
+        user_id=DEMO_USER, thread_id=thread_id,
+    )
     agent = _AGENTS[decision.task](client, override)
     reason = (
         f"caller override (router suggested: {decision.reason})"
@@ -166,7 +170,9 @@ async def _sse_events(
     if message.strip():
         thread_service.add_message(thread_id, "user", message)
 
-    route = _choose(message, override, has_attachment, attachment_name, client)
+    route = _choose(
+        message, override, has_attachment, attachment_name, client, thread_id
+    )
 
     # Always first, so the UI can label the answer before any token arrives.
     yield _sse(
@@ -180,7 +186,13 @@ async def _sse_events(
         event="routing",
     )
 
-    agent_context: dict[str, object] = {"history": history or []}
+    # Carried through tool_registry.call() and delegation so every tool call
+    # and delegation event lands in the audit trail attributed to this turn.
+    agent_context: dict[str, object] = {
+        "history": history or [],
+        "thread_id": thread_id,
+        "user_id": DEMO_USER,
+    }
     if attachment_path is not None:
         agent_context["attachment_path"] = str(attachment_path)
         agent_context["attachment_name"] = attachment_name
