@@ -127,6 +127,29 @@ def _vision_can_read(attachment_name: str | None) -> bool:
     return Path(attachment_name).suffix.lower() in _VISION_SUFFIXES
 
 
+# Plant / domain vocabulary to detect refinery procedures and equipment inquiries.
+_PLANT_SIGNALS: Final = re.compile(
+    r"\b(?:fcc|procedure|sop|refinery|shutdown|startup|safety|confined space"
+    r"|vessel|pump|flange|valve|h2s|asme|hazard|permit|maintenance|compressor"
+    r"|inspection|operation|sample-sop)\b",
+    re.I,
+)
+
+_EXTRA_DATA_SIGNALS: Final = re.compile(
+    r"\b(?:csv|dataset|dataframe)\b|\banalyze\b[^.?!\n]{0,30}\bdata\b",
+    re.I,
+)
+
+
+def is_mixed_request(message: str) -> bool:
+    """Check if a request combines programming/data tasks with plant procedures."""
+    has_coding = any(pattern.search(message) for _, pattern in _CODING_RULES) or bool(
+        _EXTRA_DATA_SIGNALS.search(message)
+    )
+    has_plant = bool(_PLANT_SIGNALS.search(message))
+    return bool(has_coding and has_plant)
+
+
 def classify(
     message: str,
     has_attachment: bool = False,
@@ -149,6 +172,14 @@ def classify(
     if has_attachment and _vision_can_read(attachment_name):
         described = attachment_name or "unnamed attachment"
         result = Classification("vision", f"readable attachment: '{described}'")
+        _record(result, message, user_id, thread_id)
+        return result
+
+    if is_mixed_request(message):
+        result = Classification(
+            "reasoning",
+            "mixed signals (coding + plant procedure) -> reasoning with coder delegation",
+        )
         _record(result, message, user_id, thread_id)
         return result
 

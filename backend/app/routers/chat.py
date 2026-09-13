@@ -60,9 +60,11 @@ from app.services import thread_service
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
 from app.core.config import settings
+from app.core.logs import get_file_logger
 from app.services.memory_service import DEMO_USER
 from app.services.router import Task, classify
 
+log = get_file_logger("drishti.chat", "chat.log")
 router = APIRouter(tags=["chat"])
 
 # The router's output maps to exactly one agent class.
@@ -165,6 +167,7 @@ async def _sse_events(
             client=client,
         )
 
+    start_time = time.monotonic()
     yield _sse({"thread_id": thread_id, "resumed": resumed}, event="thread")
 
     if message.strip():
@@ -249,9 +252,20 @@ async def _sse_events(
                 summary += " · " + ", ".join(dict.fromkeys(tools_used))
             thread_service.add_message(thread_id, "assistant", text, summary)
 
+        elapsed_ms = (time.monotonic() - start_time) * 1000
+        log.info(
+            "turn_completed | thread_id=%s | agent=%s | chat_latency_ms=%.1f",
+            thread_id,
+            route.agent_name,
+            elapsed_ms,
+        )
+
         # EventSource reconnects automatically when a stream ends, so the
         # client needs an explicit signal telling it to close the connection.
-        yield _sse({}, event="done")
+        yield _sse(
+            {"done": True, "thread_id": thread_id, "latency_ms": round(elapsed_ms, 1)},
+            event="done",
+        )
 
 
 def _stream(
