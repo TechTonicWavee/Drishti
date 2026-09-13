@@ -116,18 +116,26 @@ def user_utterances(messages: Iterable[dict[str, Any]]) -> list[UserUtterance]:
     return kept
 
 
-def _connect() -> sqlite3.Connection:
-    """A fresh connection per operation.
+from contextlib import contextmanager
+
+
+@contextmanager
+def _connect():
+    """A fresh connection per operation, cleanly closed on exit.
 
     Background tasks run on worker threads, and a shared SQLite connection is
-    not safe across them. Opening per call avoids that entirely and costs
-    nothing at this scale.
+    not safe across them. Opening per call avoids that entirely, and closing
+    in finally ensures Windows file locks are immediately released.
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
-    connection.executescript(_SCHEMA)
-    return connection
+    try:
+        connection.executescript(_SCHEMA)
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 # --- sessions ---------------------------------------------------------------
