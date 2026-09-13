@@ -47,6 +47,8 @@ type Source = {
   excerpt?: string
 }
 
+import TaskGraphView, { type TaskPlan } from './TaskGraphView'
+
 type ToolCall = { tool: string; summary: string; ok: boolean }
 
 type ExecutionResult = {
@@ -68,6 +70,7 @@ type Message = {
   role: 'user' | 'assistant'
   content: string
   routing?: Routing
+  plan?: TaskPlan
   sources?: Source[]
   tools?: ToolCall[]
   executions?: ExecutionResult[]
@@ -82,9 +85,20 @@ type ChatProps = {
   onThreadId: (threadId: string) => void
   /** Called when a turn finishes, so the sidebar can refresh. */
   onTurnEnd: () => void
+  /** Pre-populated or auto-submitted prompt when entering workbench from findings or graph */
+  initialPrompt?: string | null
+  onClearInitialPrompt?: () => void
+  onViewGraph?: () => void
 }
 
-export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
+export default function Chat({
+  threadId,
+  onThreadId,
+  onTurnEnd,
+  initialPrompt,
+  onClearInitialPrompt,
+  onViewGraph,
+}: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [override, setOverride] = useState<string>(AUTO)
@@ -228,6 +242,23 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
             }
             break
           }
+          case 'plan':
+            patchLast((m) => ({ ...m, plan: payload as TaskPlan }))
+            break
+          case 'plan_step':
+            patchLast((m) => {
+              if (!m.plan) return m
+              const updatedSteps = m.plan.steps.map((s) =>
+                s.id === payload.step_id
+                  ? { ...s, status: payload.status, summary: payload.summary ?? s.summary }
+                  : s,
+              )
+              return {
+                ...m,
+                plan: { ...m.plan, steps: updatedSteps },
+              }
+            })
+            break
           case 'routing':
             patchLast((m) => ({ ...m, routing: payload as Routing }))
             break
@@ -284,10 +315,9 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
     setStreaming(true)
   }, [])
 
-  const send = useCallback(
-    (event: React.FormEvent) => {
-      event.preventDefault()
-      const prompt = input.trim()
+  const executeTurn = useCallback(
+    (promptText: string) => {
+      const prompt = promptText.trim()
       if (!prompt || streaming) return
 
       setInput('')
@@ -308,7 +338,7 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
       sourceRef.current = source
 
       for (const name of [
-        'thread', 'routing', 'sources', 'tool', 'execution', 'artifact',
+        'thread', 'plan', 'plan_step', 'routing', 'sources', 'tool', 'execution', 'artifact',
         'stream-error',
       ]) {
         source.addEventListener(name, (e) =>
@@ -330,8 +360,28 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
         closeStream()
       }
     },
-    [applyEvent, closeStream, history, input, override, startTurn, streaming],
+    [applyEvent, closeStream, history, override, startTurn, streaming],
   )
+
+  const send = useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault()
+      executeTurn(input)
+    },
+    [executeTurn, input],
+  )
+
+  // Auto-trigger initial prompt if passed
+  useEffect(() => {
+    if (initialPrompt && !streaming) {
+      const p = initialPrompt
+      onClearInitialPrompt?.()
+      const t = setTimeout(() => {
+        executeTurn(p)
+      }, 60)
+      return () => clearTimeout(t)
+    }
+  }, [initialPrompt, streaming, executeTurn, onClearInitialPrompt])
 
   const upload = useCallback(
     async (file: File) => {
@@ -429,6 +479,9 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
                 {formatRouting(m.routing)}
               </span>
 
+              {/* Live and persisted multi-step plan */}
+              {m.plan && <TaskGraphView plan={m.plan} />}
+
               {m.tools && m.tools.length > 0 && (
                 <p className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                   {m.tools.map((t, j) => (
@@ -447,6 +500,31 @@ export default function Chat({ threadId, onThreadId, onTurnEnd }: ChatProps) {
                   )}
                 </div>
               )}
+
+              {/* Plant knowledge graph correlation banner */}
+              {onViewGraph &&
+                (m.content?.includes('V-204') ||
+                  m.content?.includes('SAMPLE-SOP-INSP-004') ||
+                  m.content?.includes('API 510') ||
+                  m.plan?.goal?.includes('V-204')) && (
+                  <div className="flex items-center justify-between rounded-xl border border-primary/25 bg-primary/5 px-4 py-2.5 text-[12px]">
+                    <div className="flex items-center gap-2 text-foreground">
+                      <span className="text-base">🕸️</span>
+                      <span>
+                        Knowledge Graph path active: <strong>V-204</strong> &rarr;{' '}
+                        <strong>SAMPLE-SOP-INSP-004</strong> &rarr;{' '}
+                        <strong>API 510</strong>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onViewGraph}
+                      className="rounded-lg border border-border bg-card px-3 py-1 font-medium text-foreground transition-colors hover:bg-accent hover:border-primary/50 shadow-[0_1px_2px_rgba(43,39,37,0.05)]"
+                    >
+                      View in Plant Graph &rarr;
+                    </button>
+                  </div>
+                )}
 
               {m.artifacts?.map((file, k) => (
                 <DeliverableCard key={k} file={file} />

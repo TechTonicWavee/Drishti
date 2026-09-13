@@ -189,6 +189,29 @@ async def _sse_events(
         event="routing",
     )
 
+    # Decompose request into an explicit multi-step plan
+    from app.services import planner
+
+    task_plan = planner.decompose_request(message)
+    yield _sse(task_plan.to_dict(), event="plan")
+    if task_plan.steps:
+        yield _sse({"step_id": task_plan.steps[0].id, "status": "running"}, event="plan_step")
+
+    steps_completed: set[str] = set()
+
+    def _mark_step_done(stype: str, summary: str | None = None) -> dict[str, Any] | None:
+        for s in task_plan.steps:
+            if s.step_type == stype and s.id not in steps_completed:
+                steps_completed.add(s.id)
+                return {"step_id": s.id, "status": "completed", "summary": summary}
+        return None
+
+    def _next_step_running() -> dict[str, Any] | None:
+        for s in task_plan.steps:
+            if s.id not in steps_completed:
+                return {"step_id": s.id, "status": "running"}
+        return None
+
     # Carried through tool_registry.call() and delegation so every tool call
     # and delegation event lands in the audit trail attributed to this turn.
     agent_context: dict[str, object] = {
@@ -214,6 +237,14 @@ async def _sse_events(
                     {"tool": event.tool, "summary": event.summary, "ok": event.ok},
                     event="tool",
                 )
+                done_ev = _mark_step_done("inspect", event.summary) or _mark_step_done(
+                    "retrieve", event.summary
+                )
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
+                    nxt = _next_step_running()
+                    if nxt:
+                        yield _sse(nxt, event="plan_step")
             elif isinstance(event, Sources):
                 yield _sse({"sources": event.sources}, event="sources")
             elif isinstance(event, Artifact):
@@ -226,6 +257,9 @@ async def _sse_events(
                     },
                     event="artifact",
                 )
+                done_ev = _mark_step_done("deliverable", event.filename)
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
             elif isinstance(event, Execution):
                 yield _sse(
                     {
@@ -237,12 +271,24 @@ async def _sse_events(
                     },
                     event="execution",
                 )
+                done_ev = _mark_step_done("compute", f"exit {event.exit_code}")
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
+                    nxt = _next_step_running()
+                    if nxt:
+                        yield _sse(nxt, event="plan_step")
     except ModelServingError as exc:
         # Named "stream-error", not "error", because EventSource dispatches its
         # own connection failures under "error" and the client must be able to
         # tell a model failure from a dropped socket.
         yield _sse({"message": str(exc)}, event="stream-error")
     finally:
+        # Complete all remaining steps in plan
+        for s in task_plan.steps:
+            if s.id not in steps_completed:
+                steps_completed.add(s.id)
+                yield _sse({"step_id": s.id, "status": "completed", "summary": "Done"}, event="plan_step")
+
         # Persist whatever was produced, even on a failed turn: a partial
         # answer the user saw should still be in the transcript they reopen.
         text = "".join(answer).strip()

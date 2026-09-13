@@ -18,6 +18,7 @@ from app.routers import (
     files,
     health,
     memory,
+    plant_graph,
     system,
     threads,
 )
@@ -68,3 +69,4 @@ app.include_router(documents.router)
 app.include_router(memory.router)
 app.include_router(threads.router)
 app.include_router(audit.router)
+app.include_router(plant_graph.router)
