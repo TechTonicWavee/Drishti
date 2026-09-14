@@ -194,7 +194,7 @@ export default function App() {
                   onTurnEnd={onTurnEnd}
                   initialPrompt={workbenchPrompt}
                   onClearInitialPrompt={() => setWorkbenchPrompt(null)}
-                  onViewGraph={() => handleExploreGraph('eq:V-204')}
+                  onViewGraph={handleExploreGraph}
                 />
               </div>
             </>

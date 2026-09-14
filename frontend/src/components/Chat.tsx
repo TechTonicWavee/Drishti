@@ -88,7 +88,22 @@ type ChatProps = {
   /** Pre-populated or auto-submitted prompt when entering workbench from findings or graph */
   initialPrompt?: string | null
   onClearInitialPrompt?: () => void
-  onViewGraph?: () => void
+  /** Called with the plant graph node id (e.g. "eq:V-204") the turn was actually about. */
+  onViewGraph?: (nodeId?: string) => void
+}
+
+// Matches any plant asset tag shape used in the knowledge graph (V-204,
+// P-101A, C-101, E-102, FL-01, CS-01, ...), rather than hardcoding one asset —
+// so the graph-correlation banner below reflects whichever equipment the
+// turn actually discussed, not always the same demo asset.
+const EQUIPMENT_TAG_RE = /\b([A-Z]{1,4}-\d{2,4}[A-Z]?)\b/
+
+function detectEquipmentTag(...texts: (string | undefined)[]): string | null {
+  for (const text of texts) {
+    const match = text?.match(EQUIPMENT_TAG_RE)
+    if (match) return match[1]
+  }
+  return null
 }
 
 export default function Chat({
@@ -501,30 +516,31 @@ export default function Chat({
                 </div>
               )}
 
-              {/* Plant knowledge graph correlation banner */}
-              {onViewGraph &&
-                (m.content?.includes('V-204') ||
-                  m.content?.includes('SAMPLE-SOP-INSP-004') ||
-                  m.content?.includes('API 510') ||
-                  m.plan?.goal?.includes('V-204')) && (
+              {/* Plant knowledge graph correlation banner — keyed off whichever
+                  asset tag actually appears in this turn, not a fixed one, so
+                  it stays accurate for any equipment the user asks about. */}
+              {(() => {
+                if (!onViewGraph) return null
+                const tag = detectEquipmentTag(m.content, m.plan?.goal)
+                if (!tag) return null
+                return (
                   <div className="flex items-center justify-between rounded-xl border border-primary/25 bg-primary/5 px-4 py-2.5 text-[12px]">
                     <div className="flex items-center gap-2 text-foreground">
                       <span className="text-base">🕸️</span>
                       <span>
-                        Knowledge Graph path active: <strong>V-204</strong> &rarr;{' '}
-                        <strong>SAMPLE-SOP-INSP-004</strong> &rarr;{' '}
-                        <strong>API 510</strong>
+                        Knowledge Graph path active: <strong>{tag}</strong>
                       </span>
                     </div>
                     <button
                       type="button"
-                      onClick={onViewGraph}
+                      onClick={() => onViewGraph(`eq:${tag}`)}
                       className="rounded-lg border border-border bg-card px-3 py-1 font-medium text-foreground transition-colors hover:bg-accent hover:border-primary/50 shadow-[0_1px_2px_rgba(43,39,37,0.05)]"
                     >
                       View in Plant Graph &rarr;
                     </button>
                   </div>
-                )}
+                )
+              })()}
 
               {m.artifacts?.map((file, k) => (
                 <DeliverableCard key={k} file={file} />

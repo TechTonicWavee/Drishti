@@ -36,6 +36,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -198,6 +199,7 @@ async def _sse_events(
         yield _sse({"step_id": task_plan.steps[0].id, "status": "running"}, event="plan_step")
 
     steps_completed: set[str] = set()
+    turn_failed = False
 
     def _mark_step_done(stype: str, summary: str | None = None) -> dict[str, Any] | None:
         for s in task_plan.steps:
@@ -281,17 +283,42 @@ async def _sse_events(
         # Named "stream-error", not "error", because EventSource dispatches its
         # own connection failures under "error" and the client must be able to
         # tell a model failure from a dropped socket.
+        turn_failed = True
         yield _sse({"message": str(exc)}, event="stream-error")
     finally:
-        # Complete all remaining steps in plan
+        text = "".join(answer).strip()
+
+        # Resolve any steps that never received an explicit completion signal.
+        # Steps backed by a real tool/execution/artifact event (inspect,
+        # retrieve, compute, deliverable) are only ever marked done above, when
+        # that event actually happens — if the turn ends without one, the step
+        # did not happen, and reporting it "completed" anyway would let the UI
+        # claim a search, calculation, or generated document that never
+        # occurred. Those are marked "failed" instead, honestly. Steps that
+        # represent the reasoning the agent does to produce its final answer
+        # (verify, synthesize) have no separate event of their own — they are
+        # marked "completed" only if the turn actually produced an answer.
+        _IMPLICIT_STEP_TYPES = {"verify", "synthesize"}
+        turn_ok = not turn_failed and bool(text)
         for s in task_plan.steps:
-            if s.id not in steps_completed:
-                steps_completed.add(s.id)
-                yield _sse({"step_id": s.id, "status": "completed", "summary": "Done"}, event="plan_step")
+            if s.id in steps_completed:
+                continue
+            steps_completed.add(s.id)
+            if s.step_type in _IMPLICIT_STEP_TYPES and turn_ok:
+                yield _sse(
+                    {"step_id": s.id, "status": "completed", "summary": "Resolved in final answer"},
+                    event="plan_step",
+                )
+            else:
+                reason = (
+                    "Turn ended in error before this step ran"
+                    if turn_failed
+                    else "No confirming action was observed for this step"
+                )
+                yield _sse({"step_id": s.id, "status": "failed", "summary": reason}, event="plan_step")
 
         # Persist whatever was produced, even on a failed turn: a partial
         # answer the user saw should still be in the transcript they reopen.
-        text = "".join(answer).strip()
         if text:
             summary = route.agent_name
             if tools_used:

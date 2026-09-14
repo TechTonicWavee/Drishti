@@ -26,7 +26,8 @@ def get_equipment_detail(tag: str) -> dict[str, Any]:
 
     eq = plant_graph.EQUIPMENT[tag_clean]
     proc = plant_graph.PROCEDURES.get(eq.governing_procedure_id)
-    std = plant_graph.STANDARDS.get(proc.standard_code.replace(" ", "-")) if proc else None
+    std_key = plant_graph.get_standard_key(proc.standard_code) if proc else None
+    std = plant_graph.STANDARDS.get(std_key) if std_key else None
 
     return {
         "equipment": eq,

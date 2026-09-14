@@ -305,6 +305,19 @@ EQUIPMENT: Final[dict[str, EquipmentNode]] = {
 # --- Graph Elements for Visualization ---------------------------------------
 
 
+def get_standard_key(standard_code: str) -> str | None:
+    """Resolve a procedure's free-text `standard_code` (e.g. "ASME Section VIII")
+    to its `STANDARDS` dict key (e.g. "ASME-VIII").
+
+    Matches on the `StandardReference.code` field rather than a naive string
+    transform of `standard_code` — a transform like replacing spaces with
+    dashes only happens to work for "API 510" / "API 521" and silently fails
+    for "ASME Section VIII", "OSHA 1910.146", and "ISO 10816-3", which do not
+    become their real keys ("ASME-VIII", "OSHA-1910", "ISO-10816") that way.
+    """
+    return next((k for k, s in STANDARDS.items() if s.code == standard_code), None)
+
+
 def get_graph_elements() -> dict[str, Any]:
     """Return nodes and edges formatted for visual rendering."""
     nodes: list[dict[str, Any]] = []
@@ -357,7 +370,7 @@ def get_graph_elements() -> dict[str, Any]:
         )
 
         # Edge from Procedure to Standard
-        std_key = next((k for k, s in STANDARDS.items() if s.code == proc.standard_code), None)
+        std_key = get_standard_key(proc.standard_code)
         if std_key:
             edges.append(
                 {

@@ -14,6 +14,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from app.services import plant_graph
+
 StepType = Literal["inspect", "retrieve", "compute", "verify", "delegate", "deliverable", "synthesize"]
 StepStatus = Literal["pending", "running", "completed", "failed"]
 
@@ -48,6 +50,17 @@ class TaskPlan:
         }
 
 
+def _detect_equipment_tag(clean_msg: str) -> str | None:
+    """Find which known plant asset (if any) the message is actually about.
+
+    Scanning the real equipment registry — rather than hardcoding one asset
+    tag — is what lets the plan (and its rendered steps) stay accurate when a
+    user or judge asks about a different piece of equipment than the one used
+    in the canned demo walkthrough.
+    """
+    return next((tag for tag in plant_graph.EQUIPMENT if tag.lower() in clean_msg), None)
+
+
 def decompose_request(message: str, context: dict[str, Any] | None = None) -> TaskPlan:
     """Decompose a user request or investigation prompt into an explicit ordered plan."""
     plan_id = f"plan_{uuid.uuid4().hex[:8]}"
@@ -68,26 +81,42 @@ def decompose_request(message: str, context: dict[str, Any] | None = None) -> Ta
             "approval note",
         ]
     ):
+        # Defaults to the demo asset (V-204) only when no other asset is named
+        # in the request — everything below is derived from the real plant
+        # graph so the plan reflects whichever equipment is actually at issue,
+        # instead of always narrating V-204 / SAMPLE-SOP-INSP-004.
+        tag = _detect_equipment_tag(clean_msg) or "V-204"
+        eq = plant_graph.EQUIPMENT.get(tag)
+        proc = plant_graph.PROCEDURES.get(eq.governing_procedure_id) if eq else None
+        proc_id = proc.id if proc else "the governing SOP"
+        standard = proc.standard_code if proc else "the applicable standard"
+        corrosion_note = eq.operating_limits.get("Minimum Corrosion Allowance") if eq else None
+        verify_desc = (
+            f"Evaluate review cycle expiration date and confirm minimum corrosion allowance ({corrosion_note})."
+            if corrosion_note
+            else f"Evaluate review cycle expiration date and confirm {tag}'s operating safety thresholds."
+        )
+
         steps = [
             PlanStep(
                 id="step-1",
                 title="Inspect Equipment Limits & Inspection Records",
                 step_type="inspect",
-                description="Query Plant Knowledge Graph for asset V-204 design specs and statutory dates.",
+                description=f"Query Plant Knowledge Graph for asset {tag} design specs and statutory dates.",
                 agent="Reasoning Agent",
             ),
             PlanStep(
                 id="step-2",
                 title="Retrieve Governing SOP & Standards Citation",
                 step_type="retrieve",
-                description="Search private ChromaDB for SAMPLE-SOP-INSP-004 and API 510 Section 6.4 rules.",
+                description=f"Search private ChromaDB for {proc_id} and {standard} rules.",
                 agent="Reasoning Agent",
             ),
             PlanStep(
                 id="step-3",
-                title="Verify Statutory Review & Thickness Thresholds",
+                title="Verify Statutory Review & Operating Thresholds",
                 step_type="verify",
-                description="Evaluate review cycle expiration date and confirm minimum corrosion allowance (3.2 mm).",
+                description=verify_desc,
                 agent="Reasoning Agent",
             ),
             PlanStep(
@@ -98,7 +127,7 @@ def decompose_request(message: str, context: dict[str, Any] | None = None) -> Ta
                 agent="Document Agent",
             ),
         ]
-        return TaskPlan(plan_id=plan_id, goal="Statutory Compliance Investigation & Escalation", steps=steps)
+        return TaskPlan(plan_id=plan_id, goal=f"Statutory Compliance Investigation & Escalation ({tag})", steps=steps)
 
     # Pattern 2: Mixed coding & plant inquiry
     if any(kw in clean_msg for kw in ["csv", "analyze data", "script", "calculate", "python", "code"]):
