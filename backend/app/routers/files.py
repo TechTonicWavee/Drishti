@@ -10,9 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from app.services.auth_service import AuthedUser, get_current_user
 from app.services.document_generator import GENERATED_DIR
 
 router = APIRouter(tags=["files"])
@@ -27,7 +28,10 @@ _MEDIA_TYPES: Final = {
 
 
 @router.get("/files/{filename}")
-async def download(filename: str) -> FileResponse:
+async def download(
+    filename: str,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> FileResponse:
     """Serve one generated file by name."""
     # A path parameter cannot normally contain a slash, but percent-encoding
     # and unicode normalisation have both been used to smuggle one. Requiring

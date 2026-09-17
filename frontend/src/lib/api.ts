@@ -55,3 +55,102 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 
   return body as Health
 }
+
+export type AuthedUser = {
+  user_id: string
+  username: string
+  display_name: string
+  role: string
+}
+
+export async function fetchMe(signal?: AbortSignal): Promise<AuthedUser | null> {
+  let response: Response
+  try {
+    response = await fetch('/api/auth/me', {
+      signal,
+      headers: { Accept: 'application/json' },
+    })
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (response.status === 401) {
+    return null
+  }
+
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`Backend responded with HTTP ${response.status}.`)
+  }
+
+  const body = (await response.json()) as AuthedUser
+  return body
+}
+
+export async function loginUser(
+  username: string,
+  password: string,
+): Promise<AuthedUser> {
+  let response: Response
+  try {
+    response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ username, password }),
+    })
+  } catch {
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (!response.ok) {
+    const errBody = (await response.json().catch(() => null)) as { detail?: string } | null
+    throw new ApiError(errBody?.detail || 'Invalid username or password.')
+  }
+
+  return (await response.json()) as AuthedUser
+}
+
+export async function loginDemo(): Promise<AuthedUser> {
+  let response: Response
+  try {
+    response = await fetch('/api/auth/demo', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    })
+  } catch {
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    throw new ApiError(UNREACHABLE)
+  }
+
+  if (!response.ok) {
+    const errBody = (await response.json().catch(() => null)) as { detail?: string } | null
+    throw new ApiError(errBody?.detail || 'Could not log in as judge demo.')
+  }
+
+  return (await response.json()) as AuthedUser
+}
+
+export async function logoutUser(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    })
+  } catch {
+    // Best-effort logout
+  }
+}

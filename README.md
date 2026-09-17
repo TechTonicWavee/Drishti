@@ -64,6 +64,11 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Deterministic follow-up grounding and citation verification (query expansion + post-hoc reference check, regression-tested) | ✅ |
 | Mixed-request detection (coding + plant procedure in one message) routed to the Reasoning Agent for delegation | ✅ |
 | Per-turn latency measurement, logged and shown in the agent trace | ✅ |
+| Interactive Plant Equipment Knowledge Graph with visual canvas and revision chain explorer | ✅ |
+| Proactive Statutory Compliance Sweeps with auto-flagging of overdue revisions and unmanaged assets | ✅ |
+| Live Multi-Step Task Planner & Execution Graph in conversation transcript | ✅ |
+| Sovereign Local Authentication & 1-Click Judge Demo Mode (PBKDF2-HMAC-SHA256, HTTP-only session cookies, tamper-evident audit logging) | ✅ |
+| Per-authenticated-user memory and thread isolation with route dependency protection | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
@@ -77,16 +82,9 @@ the repository today.**
   implement and names neither, so this is expected to be a change to
   `MODEL_SERVER_URL` — but it has never been run against vLLM, and that claim
   is untested.
-- **Authentication and RBAC.** There is no login, no user model and no
-  per-role permissions. Anyone who can reach the port can use everything.
-  A plant deployment needs this before it touches real data.
 - **Hardware tiers.** Model choice is currently one setting for one machine.
   A real rollout wants a small tier for a laptop and a larger tier for the
   GPU server, selected by profile.
-- **Per-authenticated-user memory.** Memory is keyed by `user_id`, but every
-  session currently uses the hardcoded `demo_user`, so on a shared plant
-  terminal all operators would share one memory. The schema is ready; the login
-  is not.
 - **Concurrency.** The agent trace correlates by time window because the logs
   carry no request id; under simultaneous users a trace would collect its
   neighbours' steps. Threading a request id through every log line fixes it.

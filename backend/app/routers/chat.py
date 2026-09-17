@@ -36,6 +36,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -57,6 +58,7 @@ from app.agents.vision_agent import (
     VisionAgent,
 )
 from app.services import thread_service
+from app.services.auth_service import AuthedUser, get_current_user
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
 from app.core.config import settings
@@ -114,11 +116,12 @@ def _choose(
     attachment_name: str | None,
     client: ModelServingClient,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> Route:
     """Classify the turn and build the agent that will handle it."""
     decision = classify(
         message, has_attachment, attachment_name,
-        user_id=DEMO_USER, thread_id=thread_id,
+        user_id=user_id, thread_id=thread_id,
     )
     agent = _AGENTS[decision.task](client, override)
     reason = (
@@ -148,13 +151,14 @@ async def _sse_events(
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> AsyncIterator[str]:
     # Resolve the thread before anything else, so the client can attach
     # subsequent turns to it even if this one fails partway through.
     resumed = bool(thread_id) and thread_service.thread_exists(thread_id or "")
     if resumed and thread_id:
         prior = thread_service.get_thread_messages(thread_id)
-        thread_service.note_resumed(thread_id, DEMO_USER, len(prior))
+        thread_service.note_resumed(thread_id, user_id, len(prior))
         # The stored transcript is authoritative; a client-supplied history
         # could be stale or edited, and the database already has the truth.
         history = thread_service.history_for_model(
@@ -162,7 +166,7 @@ async def _sse_events(
         )
     else:
         thread_id = await thread_service.create_thread(
-            DEMO_USER,
+            user_id,
             message or attachment_name or "New conversation",
             client=client,
         )
@@ -174,7 +178,7 @@ async def _sse_events(
         thread_service.add_message(thread_id, "user", message)
 
     route = _choose(
-        message, override, has_attachment, attachment_name, client, thread_id
+        message, override, has_attachment, attachment_name, client, thread_id, user_id=user_id
     )
 
     # Always first, so the UI can label the answer before any token arrives.
@@ -189,12 +193,36 @@ async def _sse_events(
         event="routing",
     )
 
+    # Decompose request into an explicit multi-step plan
+    from app.services import planner
+
+    task_plan = planner.decompose_request(message)
+    yield _sse(task_plan.to_dict(), event="plan")
+    if task_plan.steps:
+        yield _sse({"step_id": task_plan.steps[0].id, "status": "running"}, event="plan_step")
+
+    steps_completed: set[str] = set()
+    turn_failed = False
+
+    def _mark_step_done(stype: str, summary: str | None = None) -> dict[str, Any] | None:
+        for s in task_plan.steps:
+            if s.step_type == stype and s.id not in steps_completed:
+                steps_completed.add(s.id)
+                return {"step_id": s.id, "status": "completed", "summary": summary}
+        return None
+
+    def _next_step_running() -> dict[str, Any] | None:
+        for s in task_plan.steps:
+            if s.id not in steps_completed:
+                return {"step_id": s.id, "status": "running"}
+        return None
+
     # Carried through tool_registry.call() and delegation so every tool call
     # and delegation event lands in the audit trail attributed to this turn.
     agent_context: dict[str, object] = {
         "history": history or [],
         "thread_id": thread_id,
-        "user_id": DEMO_USER,
+        "user_id": user_id,
     }
     if attachment_path is not None:
         agent_context["attachment_path"] = str(attachment_path)
@@ -214,6 +242,14 @@ async def _sse_events(
                     {"tool": event.tool, "summary": event.summary, "ok": event.ok},
                     event="tool",
                 )
+                done_ev = _mark_step_done("inspect", event.summary) or _mark_step_done(
+                    "retrieve", event.summary
+                )
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
+                    nxt = _next_step_running()
+                    if nxt:
+                        yield _sse(nxt, event="plan_step")
             elif isinstance(event, Sources):
                 yield _sse({"sources": event.sources}, event="sources")
             elif isinstance(event, Artifact):
@@ -226,6 +262,9 @@ async def _sse_events(
                     },
                     event="artifact",
                 )
+                done_ev = _mark_step_done("deliverable", event.filename)
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
             elif isinstance(event, Execution):
                 yield _sse(
                     {
@@ -237,15 +276,52 @@ async def _sse_events(
                     },
                     event="execution",
                 )
+                done_ev = _mark_step_done("compute", f"exit {event.exit_code}")
+                if done_ev:
+                    yield _sse(done_ev, event="plan_step")
+                    nxt = _next_step_running()
+                    if nxt:
+                        yield _sse(nxt, event="plan_step")
     except ModelServingError as exc:
         # Named "stream-error", not "error", because EventSource dispatches its
         # own connection failures under "error" and the client must be able to
         # tell a model failure from a dropped socket.
+        turn_failed = True
         yield _sse({"message": str(exc)}, event="stream-error")
     finally:
+        text = "".join(answer).strip()
+
+        # Resolve any steps that never received an explicit completion signal.
+        # Steps backed by a real tool/execution/artifact event (inspect,
+        # retrieve, compute, deliverable) are only ever marked done above, when
+        # that event actually happens — if the turn ends without one, the step
+        # did not happen, and reporting it "completed" anyway would let the UI
+        # claim a search, calculation, or generated document that never
+        # occurred. Those are marked "failed" instead, honestly. Steps that
+        # represent the reasoning the agent does to produce its final answer
+        # (verify, synthesize) have no separate event of their own — they are
+        # marked "completed" only if the turn actually produced an answer.
+        _IMPLICIT_STEP_TYPES = {"verify", "synthesize"}
+        turn_ok = not turn_failed and bool(text)
+        for s in task_plan.steps:
+            if s.id in steps_completed:
+                continue
+            steps_completed.add(s.id)
+            if s.step_type in _IMPLICIT_STEP_TYPES and turn_ok:
+                yield _sse(
+                    {"step_id": s.id, "status": "completed", "summary": "Resolved in final answer"},
+                    event="plan_step",
+                )
+            else:
+                reason = (
+                    "Turn ended in error before this step ran"
+                    if turn_failed
+                    else "No confirming action was observed for this step"
+                )
+                yield _sse({"step_id": s.id, "status": "failed", "summary": reason}, event="plan_step")
+
         # Persist whatever was produced, even on a failed turn: a partial
         # answer the user saw should still be in the transcript they reopen.
-        text = "".join(answer).strip()
         if text:
             summary = route.agent_name
             if tools_used:
@@ -277,11 +353,12 @@ def _stream(
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> StreamingResponse:
     return StreamingResponse(
         _sse_events(
             message, override, has_attachment, attachment_name, client,
-            attachment_path, history, thread_id,
+            attachment_path, history, thread_id, user_id=user_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -298,6 +375,7 @@ def _stream(
 async def chat(
     request: ChatRequest,
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a reply, routing to an agent automatically."""
     return _stream(
@@ -308,6 +386,7 @@ async def chat(
         client,
         history=[turn.model_dump() for turn in request.history],
         thread_id=request.thread_id,
+        user_id=current_user.user_id,
     )
 
 
@@ -325,6 +404,7 @@ async def chat_stream(
         default=None, description="Continue this thread; omit to start one."
     ),
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """EventSource-compatible mirror of POST /chat.
 
@@ -343,7 +423,7 @@ async def chat_stream(
             turns = []
     return _stream(
         message, model, has_attachment, attachment_name, client,
-        history=turns, thread_id=thread_id,
+        history=turns, thread_id=thread_id, user_id=current_user.user_id,
     )
 
 
@@ -417,6 +497,7 @@ async def chat_upload(
     history: str = Form(default=""),
     thread_id: str = Form(default=""),
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Accept an image or PDF and stream the vision agent's reading of it.
 
@@ -441,4 +522,5 @@ async def chat_upload(
         attachment_path=saved,
         history=turns,
         thread_id=thread_id or None,
+        user_id=current_user.user_id,
     )

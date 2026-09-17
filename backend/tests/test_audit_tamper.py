@@ -16,11 +16,29 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services import audit_service as A  # noqa: E402
 
 FAILURES = 0
+
+
+@pytest.fixture(autouse=True)
+def fresh_db_per_test():
+    """Ensure pytest runs each test with its own isolated temporary database."""
+    with tempfile.TemporaryDirectory() as tmp:
+        original_db, original_wm = A.DB_PATH, A.WATERMARK_PATH
+        A.DB_PATH = Path(tmp) / "audit.db"
+        A.WATERMARK_PATH = Path(tmp) / ".audit_watermark"
+        try:
+            yield
+        finally:
+            A.DB_PATH, A.WATERMARK_PATH = original_db, original_wm
 
 
 def check(label: str, condition: bool) -> None:
