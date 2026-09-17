@@ -236,7 +236,7 @@ class ReasoningAgent(Agent):
 
         # Allow delegation tools (ask_coder_agent, ask_document_agent)
         delegation_tools = [
-            t for t in self.tools_schema()
+            t for t in tool_registry.specs(self.allowed_tools)
             if t.get("function", {}).get("name") in {"ask_coder_agent", "ask_document_agent"}
         ]
 

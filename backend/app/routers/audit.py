@@ -7,11 +7,12 @@ app.services.audit_service.record_event. Nothing here writes.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services import audit_service
+from app.services.auth_service import AuthedUser, get_current_user
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -41,6 +42,7 @@ async def list_events(
     start_time: str | None = Query(default=None),
     end_time: str | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=5000),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> list[AuditEvent]:
     """Filtered audit events, newest first."""
     rows = audit_service.query_events(
@@ -51,7 +53,9 @@ async def list_events(
 
 
 @router.get("/verify", response_model=VerifyResult)
-async def verify() -> VerifyResult:
+async def verify(
+    current_user: AuthedUser = Depends(get_current_user),
+) -> VerifyResult:
     """Recompute the hash chain and report whether it matches what is stored.
 
     Answers what the log currently contains is internally consistent. It
@@ -63,7 +67,10 @@ async def verify() -> VerifyResult:
 
 
 @router.get("/export")
-async def export(format: str = Query(default="csv")) -> StreamingResponse:
+async def export(
+    format: str = Query(default="csv"),
+    current_user: AuthedUser = Depends(get_current_user),
+) -> StreamingResponse:
     """The full audit log as a downloadable file, oldest first."""
     if format != "csv":
         format = "csv"  # the only format built; silently normalise rather

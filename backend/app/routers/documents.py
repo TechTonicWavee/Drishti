@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services import knowledge_base
+from app.services.auth_service import AuthedUser, get_current_user
 from app.services.dependencies import get_model_client
 from app.services.knowledge_base import LIBRARY_PATH
 from app.services.model_client import ModelServingClient, ModelServingError
@@ -72,7 +73,9 @@ def _safe_name(raw: str | None) -> str:
 
 
 @router.get("", response_model=list[Document])
-async def list_documents() -> list[Document]:
+async def list_documents(
+    current_user: AuthedUser = Depends(get_current_user),
+) -> list[Document]:
     """Everything currently searchable."""
     return [Document(**d) for d in knowledge_base.list_documents()]
 
@@ -81,6 +84,7 @@ async def list_documents() -> list[Document]:
 async def add_document(
     file: UploadFile = File(...),
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> IngestResult:
     """Store a document and index it for retrieval."""
     name = _safe_name(file.filename)
@@ -137,7 +141,10 @@ async def add_document(
 
 
 @router.delete("/{source}", response_model=list[Document])
-async def remove_document(source: str) -> list[Document]:
+async def remove_document(
+    source: str,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> list[Document]:
     """Drop a document from the index and disk, returning what remains."""
     try:
         removed = knowledge_base.remove_document(source)

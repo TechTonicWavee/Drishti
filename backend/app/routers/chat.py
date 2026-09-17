@@ -58,6 +58,7 @@ from app.agents.vision_agent import (
     VisionAgent,
 )
 from app.services import thread_service
+from app.services.auth_service import AuthedUser, get_current_user
 from app.services.dependencies import get_model_client
 from app.services.model_client import ModelServingClient, ModelServingError
 from app.core.config import settings
@@ -115,11 +116,12 @@ def _choose(
     attachment_name: str | None,
     client: ModelServingClient,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> Route:
     """Classify the turn and build the agent that will handle it."""
     decision = classify(
         message, has_attachment, attachment_name,
-        user_id=DEMO_USER, thread_id=thread_id,
+        user_id=user_id, thread_id=thread_id,
     )
     agent = _AGENTS[decision.task](client, override)
     reason = (
@@ -149,13 +151,14 @@ async def _sse_events(
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> AsyncIterator[str]:
     # Resolve the thread before anything else, so the client can attach
     # subsequent turns to it even if this one fails partway through.
     resumed = bool(thread_id) and thread_service.thread_exists(thread_id or "")
     if resumed and thread_id:
         prior = thread_service.get_thread_messages(thread_id)
-        thread_service.note_resumed(thread_id, DEMO_USER, len(prior))
+        thread_service.note_resumed(thread_id, user_id, len(prior))
         # The stored transcript is authoritative; a client-supplied history
         # could be stale or edited, and the database already has the truth.
         history = thread_service.history_for_model(
@@ -163,7 +166,7 @@ async def _sse_events(
         )
     else:
         thread_id = await thread_service.create_thread(
-            DEMO_USER,
+            user_id,
             message or attachment_name or "New conversation",
             client=client,
         )
@@ -175,7 +178,7 @@ async def _sse_events(
         thread_service.add_message(thread_id, "user", message)
 
     route = _choose(
-        message, override, has_attachment, attachment_name, client, thread_id
+        message, override, has_attachment, attachment_name, client, thread_id, user_id=user_id
     )
 
     # Always first, so the UI can label the answer before any token arrives.
@@ -219,7 +222,7 @@ async def _sse_events(
     agent_context: dict[str, object] = {
         "history": history or [],
         "thread_id": thread_id,
-        "user_id": DEMO_USER,
+        "user_id": user_id,
     }
     if attachment_path is not None:
         agent_context["attachment_path"] = str(attachment_path)
@@ -350,11 +353,12 @@ def _stream(
     attachment_path: Path | None = None,
     history: list[dict[str, str]] | None = None,
     thread_id: str | None = None,
+    user_id: str = "demo_user",
 ) -> StreamingResponse:
     return StreamingResponse(
         _sse_events(
             message, override, has_attachment, attachment_name, client,
-            attachment_path, history, thread_id,
+            attachment_path, history, thread_id, user_id=user_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -371,6 +375,7 @@ def _stream(
 async def chat(
     request: ChatRequest,
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a reply, routing to an agent automatically."""
     return _stream(
@@ -381,6 +386,7 @@ async def chat(
         client,
         history=[turn.model_dump() for turn in request.history],
         thread_id=request.thread_id,
+        user_id=current_user.user_id,
     )
 
 
@@ -398,6 +404,7 @@ async def chat_stream(
         default=None, description="Continue this thread; omit to start one."
     ),
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """EventSource-compatible mirror of POST /chat.
 
@@ -416,7 +423,7 @@ async def chat_stream(
             turns = []
     return _stream(
         message, model, has_attachment, attachment_name, client,
-        history=turns, thread_id=thread_id,
+        history=turns, thread_id=thread_id, user_id=current_user.user_id,
     )
 
 
@@ -490,6 +497,7 @@ async def chat_upload(
     history: str = Form(default=""),
     thread_id: str = Form(default=""),
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Accept an image or PDF and stream the vision agent's reading of it.
 
@@ -514,4 +522,5 @@ async def chat_upload(
         attachment_path=saved,
         history=turns,
         thread_id=thread_id or None,
+        user_id=current_user.user_id,
     )

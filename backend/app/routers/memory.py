@@ -13,8 +13,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 
 from app.services import memory_service
+from app.services.auth_service import AuthedUser, get_current_user
 from app.services.dependencies import get_model_client
-from app.services.memory_service import DEMO_USER
 from app.services.model_client import ModelServingClient
 
 router = APIRouter(tags=["memory"])
@@ -47,21 +47,25 @@ class MemoryFact(BaseModel):
 
 async def _extract_and_save(
     session_id: str,
+    user_id: str,
     messages: list[dict[str, Any]],
     client: ModelServingClient,
 ) -> None:
     """Background work: read the user's own turns, store what is durable."""
     utterances = memory_service.user_utterances(messages)
     facts = await memory_service.extract_memory(
-        utterances, DEMO_USER, client=client, session_id=session_id
+        utterances, user_id, client=client, session_id=session_id
     )
-    memory_service.save_memory(DEMO_USER, facts, session_id)
+    memory_service.save_memory(user_id, facts, session_id)
 
 
 @router.post("/session/start")
-async def session_start(body: SessionStart) -> dict[str, str]:
+async def session_start(
+    body: SessionStart,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> dict[str, str]:
     """Record that a session began."""
-    memory_service.start_session(body.session_id, DEMO_USER)
+    memory_service.start_session(body.session_id, current_user.user_id)
     return {"session_id": body.session_id, "status": "started"}
 
 
@@ -70,6 +74,7 @@ async def session_end(
     body: SessionEnd,
     background: BackgroundTasks,
     client: ModelServingClient = Depends(get_model_client),
+    current_user: AuthedUser = Depends(get_current_user),
 ) -> dict[str, str]:
     """Close a session and extract durable facts from it in the background.
 
@@ -80,6 +85,7 @@ async def session_end(
     background.add_task(
         _extract_and_save,
         body.session_id,
+        current_user.user_id,
         [turn.model_dump() for turn in body.messages],
         client,
     )
@@ -87,12 +93,18 @@ async def session_end(
 
 
 @router.get("/memory/{user_id}", response_model=list[MemoryFact])
-async def read_memory(user_id: str) -> list[MemoryFact]:
+async def read_memory(
+    user_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> list[MemoryFact]:
     """Stored facts for a user. Debug and inspection use."""
     return [MemoryFact(**row) for row in memory_service.list_memory(user_id)]
 
 
 @router.delete("/memory/{user_id}")
-async def clear_memory(user_id: str) -> dict[str, int | str]:
+async def clear_memory(
+    user_id: str,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> dict[str, int | str]:
     """Forget everything stored for a user."""
     return {"user_id": user_id, "removed": memory_service.forget(user_id)}

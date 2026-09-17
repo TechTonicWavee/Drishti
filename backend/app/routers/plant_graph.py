@@ -4,21 +4,27 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.services import plant_graph
+from app.services.auth_service import AuthedUser, get_current_user
 
 router = APIRouter(tags=["plant-graph"])
 
 
 @router.get("/plant-graph/elements")
-def get_graph_elements() -> dict[str, Any]:
+def get_graph_elements(
+    current_user: AuthedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """Return all equipment, procedures, revisions, and standards nodes and links."""
     return plant_graph.get_graph_elements()
 
 
 @router.get("/plant-graph/equipment/{tag}")
-def get_equipment_detail(tag: str) -> dict[str, Any]:
+def get_equipment_detail(
+    tag: str,
+    current_user: AuthedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """Return detailed information and governing procedure for a specific asset tag."""
     tag_clean = tag.strip().upper()
     if tag_clean not in plant_graph.EQUIPMENT:
@@ -37,7 +43,9 @@ def get_equipment_detail(tag: str) -> dict[str, Any]:
 
 
 @router.get("/compliance/findings")
-def get_compliance_findings() -> list[dict[str, Any]]:
+def get_compliance_findings(
+    current_user: AuthedUser = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """Return currently active compliance findings without re-running a sweep."""
     # Run in evaluation mode (read-only without duplicate audit recording)
     findings = plant_graph.compliance_sweep(record_audit=False)
@@ -58,7 +66,9 @@ def get_compliance_findings() -> list[dict[str, Any]]:
 
 
 @router.post("/compliance/sweep")
-def trigger_compliance_sweep() -> dict[str, Any]:
+def trigger_compliance_sweep(
+    current_user: AuthedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """Proactively sweep all plant assets, procedures, and statutory review cycles."""
     findings = plant_graph.compliance_sweep(record_audit=True)
     return {

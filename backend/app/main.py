@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import (
     audit,
+    auth,
     chat,
     documents,
     files,
@@ -22,11 +23,15 @@ from app.routers import (
     system,
     threads,
 )
+from app.services import auth_service
 from app.services.model_client import ModelServingClient
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize authentication storage and seed accounts (demo & operator)
+    auth_service.seed_initial_users()
+
     # One client, one connection pool, for the life of the process.
     app.state.model_client = ModelServingClient(
         settings.model_server_url,
@@ -62,6 +67,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(system.router)
 app.include_router(files.router)

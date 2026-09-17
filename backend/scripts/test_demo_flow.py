@@ -49,6 +49,9 @@ def main():
     print("=" * 60)
 
     with httpx.Client() as client:
+        # Authenticate as demo user for the test session
+        client.post("http://127.0.0.1:8000/auth/demo")
+
         # TEST 1: Multi-turn Follow-up Question
         print("\n[*] TEST 1: Turn 1 — Confined Space Entry Rules...", flush=True)
         reply1, thread_id, events1, lat1 = stream_turn(client, "Summarize the confined space entry rules.")

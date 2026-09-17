@@ -4,11 +4,18 @@ import AirGapBadge from '@/components/AirGapBadge'
 import AuditView from '@/components/AuditView'
 import Chat from '@/components/Chat'
 import KnowledgeBase from '@/components/KnowledgeBase'
-import ThreadSidebar, { type ThreadSidebarHandle } from '@/components/ThreadSidebar'
-import { ApiError, fetchHealth, type Health } from '@/lib/api'
-
+import LoginPage from '@/components/LoginPage'
 import Overview from '@/components/Overview'
 import PlantGraphView from '@/components/PlantGraphView'
+import ThreadSidebar, { type ThreadSidebarHandle } from '@/components/ThreadSidebar'
+import {
+  ApiError,
+  fetchHealth,
+  fetchMe,
+  logoutUser,
+  type AuthedUser,
+  type Health,
+} from '@/lib/api'
 
 // Often enough that a dead backend is obvious within a demo beat, rarely
 // enough to be invisible in the network log.
@@ -19,11 +26,48 @@ type Status =
   | { kind: 'connected'; health: Health }
   | { kind: 'failed'; message: string }
 
+type AuthStatus =
+  | { kind: 'checking' }
+  | { kind: 'anonymous' }
+  | { kind: 'authed'; user: AuthedUser }
+
 type ActiveView = 'overview' | 'workbench' | 'graph' | 'audit'
 
 export default function App() {
   const [status, setStatus] = useState<Status>({ kind: 'checking' })
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({ kind: 'checking' })
   const [attempt, setAttempt] = useState(0)
+
+  // Check authentication session on mount and when recheck is requested
+  useEffect(() => {
+    const controller = new AbortController()
+    let cancelled = false
+
+    fetchMe(controller.signal)
+      .then((user) => {
+        if (cancelled) return
+        if (user) {
+          setAuthStatus({ kind: 'authed', user })
+        } else {
+          setAuthStatus({ kind: 'anonymous' })
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setAuthStatus({ kind: 'anonymous' })
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [attempt])
+
+  const handleLogout = useCallback(async () => {
+    await logoutUser()
+    setAuthStatus({ kind: 'anonymous' })
+  }, [])
 
   // Polled, not checked once. A one-shot check goes on displaying "Backend
   // connected" long after the backend has died — which is exactly when the
@@ -99,6 +143,30 @@ export default function App() {
     setView('graph')
   }, [])
 
+  if (authStatus.kind === 'checking') {
+    return (
+      <div className="relative flex min-h-dvh items-center justify-center bg-background px-6">
+        <AirGapBadge />
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="size-3 animate-pulse rounded-full bg-brand" />
+          <p className="text-[13px] text-muted-foreground">
+            Verifying sovereign session…
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (authStatus.kind === 'anonymous') {
+    return (
+      <LoginPage
+        onSuccess={(user) => setAuthStatus({ kind: 'authed', user })}
+        backendError={status.kind === 'failed' ? status.message : null}
+        onRetryBackend={recheck}
+      />
+    )
+  }
+
   return (
     <div className="flex min-h-dvh">
       <AirGapBadge />
@@ -126,31 +194,49 @@ export default function App() {
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 MRPL Mangalore · On-Premise Sovereign AI
               </p>
-              <nav className="flex gap-1 rounded-full border border-border bg-card p-1 text-[12px] shadow-[0_1px_3px_rgba(43,39,37,0.06)]">
-                {(
-                  [
-                    { id: 'overview', label: 'Overview' },
-                    { id: 'workbench', label: 'Workbench' },
-                    { id: 'graph', label: 'Plant Graph' },
-                    { id: 'audit', label: 'Audit Log' },
-                  ] as const
-                ).map((tab) => (
+              <div className="flex flex-wrap items-center gap-2">
+                <nav className="flex gap-1 rounded-full border border-border bg-card p-1 text-[12px] shadow-[0_1px_3px_rgba(43,39,37,0.06)]">
+                  {(
+                    [
+                      { id: 'overview', label: 'Overview' },
+                      { id: 'workbench', label: 'Workbench' },
+                      { id: 'graph', label: 'Plant Graph' },
+                      { id: 'audit', label: 'Audit Log' },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setView(tab.id)}
+                      aria-current={view === tab.id ? 'true' : undefined}
+                      className={[
+                        'rounded-full px-4 py-1.5 font-medium transition-all duration-150',
+                        view === tab.id
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground',
+                      ].join(' ')}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </nav>
+
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-muted/40 px-3 py-1.5 text-[11px] font-medium text-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    {authStatus.user.role === 'demo'
+                      ? 'Judge Demo Access'
+                      : `Signed in as ${authStatus.user.display_name}`}
+                  </span>
                   <button
-                    key={tab.id}
                     type="button"
-                    onClick={() => setView(tab.id)}
-                    aria-current={view === tab.id ? 'true' : undefined}
-                    className={[
-                      'rounded-full px-4 py-1.5 font-medium transition-all duration-150',
-                      view === tab.id
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground',
-                    ].join(' ')}
+                    onClick={handleLogout}
+                    className="rounded-full border border-border bg-card px-3 py-1.5 text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(43,39,37,0.04)] transition-colors hover:bg-muted hover:text-foreground"
                   >
-                    {tab.label}
+                    Sign out
                   </button>
-                ))}
-              </nav>
+                </div>
+              </div>
             </div>
             <h1 className="font-heading text-4xl leading-tight sm:text-5xl">
               Drishti Intelligent Workbench
