@@ -173,6 +173,21 @@ class VisionAgent(Agent):
             display_name = context.get("attachment_name")
             if display_name:
                 result = {**result, "source_file": str(display_name)}
+
+            try:
+                from app.services.audit_service import record_event
+
+                record_event(
+                    "vision_extraction",
+                    context.get("user_id") or "demo_user",
+                    f"read {result['source_file']}: "
+                    f"{result['pages_read']}/{result['total_pages']} page(s), "
+                    f"{len(result['findings'])} finding(s)",
+                    thread_id=context.get("thread_id"),
+                    source_component="vision_agent.py",
+                )
+            except Exception as exc:
+                log.warning("audit recording failed: %s", exc)
         except ImagePrepError as exc:
             yield Delta(f"That file could not be read: {exc}")
             return

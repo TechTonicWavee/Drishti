@@ -114,5 +114,22 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
 
+    # --- Authentication & Demo Access (Section 9) ---
+    # Session cookie name used by the browser and EventSource client.
+    session_cookie_name: str = "drishti_session"
+
+    # Session lifetime in hours. Comfortably exceeds a full judging slot.
+    session_ttl_hours: float = 8.0
+
+    # Server-side switch allowing instant one-click judge demo entry.
+    demo_login_enabled: bool = True
+
+    # Emergency kill switch: when False, the entire auth gate is bypassed and
+    # requests unconditionally resolve as the default DEMO_USER identity.
+    require_auth: bool = True
+
+    # Iteration count for standard library PBKDF2-HMAC-SHA256 password hashing.
+    pbkdf2_iterations: int = 200_000
+
 
 settings = Settings()

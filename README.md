@@ -60,6 +60,15 @@ Everything below runs locally, today, and is verified rather than asserted.
 | Knowledge base management from the UI — add, list, remove documents | ✅ |
 | Cross-session memory of the user, with structural RAG isolation | ✅ |
 | Persistent conversation threads with a sidebar — resume any past chat | ✅ |
+| Tamper-evident cross-cutting audit trail, with a live verify + export UI | ✅ |
+| Deterministic follow-up grounding and citation verification (query expansion + post-hoc reference check, regression-tested) | ✅ |
+| Mixed-request detection (coding + plant procedure in one message) routed to the Reasoning Agent for delegation | ✅ |
+| Per-turn latency measurement, logged and shown in the agent trace | ✅ |
+| Interactive Plant Equipment Knowledge Graph with visual canvas and revision chain explorer | ✅ |
+| Proactive Statutory Compliance Sweeps with auto-flagging of overdue revisions and unmanaged assets | ✅ |
+| Live Multi-Step Task Planner & Execution Graph in conversation transcript | ✅ |
+| Sovereign Local Authentication & 1-Click Judge Demo Mode (PBKDF2-HMAC-SHA256, HTTP-only session cookies, tamper-evident audit logging) | ✅ |
+| Per-authenticated-user memory and thread isolation with route dependency protection | ✅ |
 
 Four local models: `qwen2.5:7b` (reasoning), `qwen2.5-coder:7b` (coding),
 `qwen2.5vl:7b` (vision), `nomic-embed-text` (embeddings).
@@ -73,16 +82,9 @@ the repository today.**
   implement and names neither, so this is expected to be a change to
   `MODEL_SERVER_URL` — but it has never been run against vLLM, and that claim
   is untested.
-- **Authentication and RBAC.** There is no login, no user model and no
-  per-role permissions. Anyone who can reach the port can use everything.
-  A plant deployment needs this before it touches real data.
 - **Hardware tiers.** Model choice is currently one setting for one machine.
   A real rollout wants a small tier for a laptop and a larger tier for the
   GPU server, selected by profile.
-- **Per-authenticated-user memory.** Memory is keyed by `user_id`, but every
-  session currently uses the hardcoded `demo_user`, so on a shared plant
-  terminal all operators would share one memory. The schema is ready; the login
-  is not.
 - **Concurrency.** The agent trace correlates by time window because the logs
   carry no request id; under simultaneous users a trace would collect its
   neighbours' steps. Threading a request id through every log line fixes it.
@@ -503,23 +505,30 @@ requests itself and the specialist never earns its place.
 Delegation is capped at one level by an explicit depth counter, not by relying
 on CoderAgent happening to have no tools today.
 
-### Two honest limitations
+### Mixed-request routing, and one remaining honest limitation
 
-**The rule-based router acts before the agent does.** A mixed request
-containing the word "python" is classified as `coding` and sent straight to the
-Coder Agent, so the Reasoning Agent never sees it and cannot delegate.
-Delegation therefore only fires on mixed requests that do *not* trip the
-coding classifier. These are two different mechanisms and the router wins
-first.
+**The router now detects mixed requests before classifying them.**
+`is_mixed_request()` in `app/services/router.py` checks a message against both
+the coding-signal rules and a plant-vocabulary pattern; when both match —
+*"Analyze this CSV data. Then explain the FCC shutdown procedure."* — the
+message routes to the Reasoning Agent with reason `mixed signals (coding +
+plant procedure) -> reasoning with coder delegation`, rather than being
+claimed outright by the coding classifier. This closes a gap an earlier
+version of this project had: a mixed request containing the word "python"
+used to be sent straight to the Coder Agent, where the Reasoning Agent never
+saw it and could not delegate. Covered by
+`backend/tests/test_sih_fixes.py`.
 
-**qwen2.5:7b's multi-step tool discipline is imperfect.** When the document
-lookup comes first in a mixed request, the model frequently finishes the
-coding part itself instead of making a second tool call — even when explicitly
-instructed not to. Delegation is reliable when the coding ask comes first
-(*"Build me a helper that flags an out-of-range reading. Separately, what does
-the SOP say about oxygen limits?"* calls both tools). A larger model on the
-GPU server should behave better; this is a model-capability limit, not a
-plumbing failure.
+**qwen2.5:7b's multi-step tool discipline is still imperfect once the message
+reaches the Reasoning Agent.** Correct routing gets the request to the agent
+that can delegate; it does not guarantee the model chooses to. When the
+document lookup comes first in a mixed request, the model occasionally
+finishes the coding part itself instead of making a second tool call — even
+when explicitly instructed not to. Delegation is most reliable when the coding
+ask comes first (*"Build me a helper that flags an out-of-range reading.
+Separately, what does the SOP say about oxygen limits?"* calls both tools). A
+larger model on the GPU server should behave better; this is a
+model-capability limit, not a plumbing failure.
 
 ### Audit logs
 
@@ -544,7 +553,7 @@ server runs does not silently send every later entry into a deleted inode.
 | --- | --- | --- |
 | `reasoning` | `qwen2.5:7b` | live |
 | `coding` | `qwen2.5-coder:7b` | live |
-| `vision` | — | recognised, not yet implemented |
+| `vision` | `qwen2.5vl:7b` | live |
 
 **It is regular expressions, not an LLM.** Routing sits in front of every
 request, so it has to be fast, and an operator asking "why did it pick that
@@ -608,11 +617,11 @@ curl "http://localhost:8000/threads/<id>/messages"
 Creation and resumption are recorded in `backend/logs/threads.log` — ids and
 counts, never message content.
 
-### A caution for the demo
+### A follow-up bug, and how it is now closed deterministically
 
 While testing threads, a follow-up question — *"and what is the hydrogen
-sulphide limit?"* — was answered **without retrieval being called at all**, and
-the model wrote a fabricated citation to match:
+sulphide limit?"* — was once answered **without retrieval being called at
+all**, and the model wrote a fabricated citation to match:
 
 > the acceptable limit … is **10 ppm** … Document: HYDROGEN SULFIDE (H2S)
 > EXPOSURE CONTROL PROCEDURE, **SAMPLE-SOP-HSE-022, Revision 3**
@@ -621,14 +630,108 @@ The real SOP says **below 5 ppm**, and `SAMPLE-SOP-HSE-022` does not exist. A
 limit twice as permissive as the procedure, under an invented document number,
 in a confined-space safety answer.
 
-The prompt now forbids writing any document reference that did not come from a
-search result, and states that a follow-up needs its own search. Asked
-standalone, the same question returns 5 ppm citing the correct document, so the
-retrieval path is sound — the failure was skipping it.
+This is no longer only a prompt instruction. `ReasoningAgent.run_stream()` in
+`app/agents/reasoning_agent.py` now runs a deterministic backstop on every
+turn, including follow-ups:
 
-**Trust the Sources card, not prose.** The card is populated only from actual
-retrieval results. A "Reference:" section inside the answer text is written by
-the model and is not verified against anything.
+- `_expand_query()` expands refinery acronyms (`H2S` → `hydrogen sulphide`,
+  `FCC` → `fluid catalytic cracking`, …) and folds in equipment/procedure
+  context from the previous user turn, so a short follow-up such as *"what is
+  the H2S limit?"* is searched as if it had named confined-space entry
+  explicitly.
+- `search_knowledge_base` is called unconditionally before the model
+  generates an answer — not left to the model's discretion — so a follow-up
+  can no longer skip retrieval the way it did in the incident above.
+- `verify_and_clean_citations()` then checks every `SAMPLE-SOP-…` reference
+  the model's reply contains against the document references actually present
+  in the retrieved chunks: a fabricated reference number is corrected to the
+  real one when a genuine match exists, and stripped entirely when there is no
+  supporting document at all (e.g. a general-knowledge question with nothing
+  to cite).
+
+Both mechanisms are covered by `backend/tests/test_sih_fixes.py`
+(`test_query_expansion_for_followup`, `test_citation_verification_correction`,
+`test_citation_verification_strips_fake_when_no_hits`), so this failure mode
+has a regression test, not just a fixed prompt.
+
+**The Sources card and the prose citations are now both trustworthy, for
+different reasons.** The Sources card is populated only from actual retrieval
+results, as before. A "Reference:"/"Document:" line inside the answer text is
+written by the model, but it is no longer taken on faith either — it is
+checked against the same retrieval results before the answer is shown.
+
+## The audit trail
+
+Every feature already writes its own log — router.log, tools.log,
+delegation.log, vision.log, sandbox.log, documents.log, memory.log,
+threads.log — for debugging one feature at a time. `backend/data/audit.db`
+is different in kind: one cross-cutting timeline spanning all of them, built
+for "show me everything that happened, and prove nobody edited the record
+afterwards."
+
+### The hash chain
+
+Each row's `row_hash` is `SHA-256(this row's own fields + the previous row's
+row_hash)`. `verify_chain_integrity()` walks every row and recomputes it —
+checking, critically, that a row's *stored* `prev_hash` actually matches the
+hash of the row that precedes it, not just that `row_hash` recomputes
+correctly. That distinction mattered: an earlier version only checked the
+latter, which meant corrupting the stored `prev_hash` column alone — without
+touching `row_hash` — passed silently. `tests/test_audit_tamper.py` caught
+this by testing exactly that attack, and the check now closes it.
+
+```bash
+curl "http://localhost:8000/audit/verify"
+# {"intact": true, "total_rows": 10, "first_break_at": null, "reason": null}
+```
+
+Live-tested end to end: ran a document question, a coding task and a file
+upload through the real API, confirmed `audit.db` captured a `thread_created`,
+`route_decision`, and the feature-specific event (`tool_call`,
+`sandbox_execution`, `vision_extraction`) for each — 10 rows, `intact: true`.
+Then opened `sqlite3 data/audit.db` directly and edited one row's `summary`
+by hand:
+
+```
+before : intact=true,  total_rows=10, first_break_at=null
+after  : intact=false, total_rows=10, first_break_at=3,
+         reason="stored hash does not match recomputed hash (row content was altered)"
+```
+
+Exactly the tampered row, by id. `GET /audit/export?format=csv` produced a
+2,984-byte CSV that opened cleanly with Python's `csv` module, all 10 rows
+readable including the tampered one.
+
+### The honest limit — verified, not assumed
+
+Deleting `audit.db` outright while the backend is running raises **no
+exception anywhere** — confirmed experimentally before building around it, not
+assumed. A connection already open writes into the now-unlinked inode and
+reports success (real writes, unreachable by path, gone once the process
+exits); the next fresh connection — this module's own pattern, and every other
+service's in this codebase — finds no file, silently creates an empty one,
+and reports zero rows. `rm audit.db` erases the log more completely than
+editing any row in it, and `verify_chain_integrity()` alone cannot catch it:
+run against the freshly recreated file, it correctly reports `intact: true`,
+because the short chain that survives *is* internally consistent — that's
+true and also misses the point entirely.
+
+The defence is a watermark kept **outside** the database — `data/.audit_watermark`
+— recording the row count and hash this process last wrote. Every write
+compares the database's actual last row against it first; a mismatch is
+recorded as its own `audit_integrity_breach` event, naming what was expected
+versus what was found, rather than silently accepted as a fresh start.
+
+### Endpoints
+
+```bash
+curl "http://localhost:8000/audit/events?event_type=tool_call&limit=50"
+curl "http://localhost:8000/audit/verify"
+curl "http://localhost:8000/audit/export?format=csv" -o audit.csv
+```
+
+An **Audit log** tab in the UI wraps all three: a filterable table, a
+prominent Verify Integrity button, and an Export CSV link.
 
 ## Memory of the user
 
@@ -777,13 +880,13 @@ request to write a script.
 
 ### Sample documents
 
-`backend/data/sample_docs/` holds three synthetic SOP excerpts (~450 words
-each): an FCC unit shutdown procedure, pressure vessel inspection guidelines,
-and a confined space entry procedure. Each opens with a banner stating it is
-fictional and must not be used for actual plant operations — they read like
-real procedures, and one being mistaken for an operational document is a
-safety problem, not just a data-quality one. **No real MRPL data is used, and
-none is needed.**
+`backend/data/sample_docs/` holds five synthetic SOP excerpts: an FCC unit
+shutdown procedure, pressure vessel inspection guidelines, a confined space
+entry procedure, flare system operation, and pump vibration limits. Each opens
+with a banner stating it is fictional and must not be used for actual plant
+operations — they read like real procedures, and one being mistaken for an
+operational document is a safety problem, not just a data-quality one. **No
+real MRPL data is used, and none is needed.**
 
 ### Adding your own documents
 

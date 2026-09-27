@@ -41,3 +41,4 @@ backend/data/memory.db
 backend/data/*.db
 backend/data/*.db-journal
 backend/data/*.db-wal
+backend/data/.audit_watermark

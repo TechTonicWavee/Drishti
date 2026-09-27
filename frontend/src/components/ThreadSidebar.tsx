@@ -38,7 +38,7 @@ export default function ThreadSidebar({
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch('/api/threads?user_id=demo_user')
+      const response = await fetch('/api/threads')
       if (!response.ok) return
       setThreads((await response.json()) as ThreadSummary[])
     } catch {

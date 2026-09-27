@@ -127,20 +127,60 @@ def _vision_can_read(attachment_name: str | None) -> bool:
     return Path(attachment_name).suffix.lower() in _VISION_SUFFIXES
 
 
+# Plant / domain vocabulary to detect refinery procedures and equipment inquiries.
+_PLANT_SIGNALS: Final = re.compile(
+    r"\b(?:fcc|procedure|sop|refinery|shutdown|startup|safety|confined space"
+    r"|vessel|pump|flange|valve|h2s|asme|hazard|permit|maintenance|compressor"
+    r"|inspection|operation|sample-sop)\b",
+    re.I,
+)
+
+_EXTRA_DATA_SIGNALS: Final = re.compile(
+    r"\b(?:csv|dataset|dataframe)\b|\banalyze\b[^.?!\n]{0,30}\bdata\b",
+    re.I,
+)
+
+
+def is_mixed_request(message: str) -> bool:
+    """Check if a request combines programming/data tasks with plant procedures."""
+    has_coding = any(pattern.search(message) for _, pattern in _CODING_RULES) or bool(
+        _EXTRA_DATA_SIGNALS.search(message)
+    )
+    has_plant = bool(_PLANT_SIGNALS.search(message))
+    return bool(has_coding and has_plant)
+
+
 def classify(
     message: str,
     has_attachment: bool = False,
     attachment_name: str | None = None,
+    *,
+    user_id: str | None = None,
+    thread_id: str | None = None,
 ) -> Classification:
     """Classify a message and record the decision.
 
     `attachment_name` is optional: `has_attachment` alone cannot distinguish a
     photograph from a PDF, so callers pass the filename when they have it.
+
+    `user_id`/`thread_id` are optional and unrelated to classification itself
+    — they exist only so the cross-cutting audit trail can attribute the
+    decision to a turn. Omitting them (as classify_task and any test still
+    can) keeps this function usable as a pure classifier with zero I/O beyond
+    its own router.log line.
     """
     if has_attachment and _vision_can_read(attachment_name):
         described = attachment_name or "unnamed attachment"
         result = Classification("vision", f"readable attachment: '{described}'")
-        _record(result, message)
+        _record(result, message, user_id, thread_id)
+        return result
+
+    if is_mixed_request(message):
+        result = Classification(
+            "reasoning",
+            "mixed signals (coding + plant procedure) -> reasoning with coder delegation",
+        )
+        _record(result, message, user_id, thread_id)
         return result
 
     for rule_name, pattern in _CODING_RULES:
@@ -149,11 +189,11 @@ def classify(
             result = Classification(
                 "coding", f"matched {rule_name}: '{match.group(0).strip()}'"
             )
-            _record(result, message)
+            _record(result, message, user_id, thread_id)
             return result
 
     result = Classification("reasoning", "no coding or vision signals matched")
-    _record(result, message)
+    _record(result, message, user_id, thread_id)
     return result
 
 
@@ -166,9 +206,26 @@ def classify_task(
     return classify(message, has_attachment, attachment_name).task
 
 
-def _record(result: Classification, message: str) -> None:
+def _record(
+    result: Classification,
+    message: str,
+    user_id: str | None,
+    thread_id: str | None,
+) -> None:
     # The message preview makes the log auditable — a decision you cannot tie
     # back to an input is not much of an audit trail. It is truncated, and this
     # file stays on the plant's own disk like everything else here.
     preview = " ".join(message.split())[:80]
     log.info('task=%s | reason=%s | message="%s"', result.task, result.reason, preview)
+
+    if user_id is not None:
+        # The detailed router.log line above already exists for debugging one
+        # decision; this is the same decision folded into the cross-cutting
+        # timeline everything else also reports into.
+        from app.services.audit_service import record_event
+
+        record_event(
+            "route_decision", user_id,
+            f"routed to {result.task} ({result.reason})",
+            thread_id=thread_id, source_component="router.py",
+        )

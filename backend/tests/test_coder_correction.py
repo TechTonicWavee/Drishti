@@ -15,6 +15,7 @@ Run:  .venv/bin/python tests/test_coder_correction.py
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +23,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agents.base_agent import Delta, Execution  # noqa: E402
 from app.agents.coding_agent import CoderAgent  # noqa: E402
+from app.services import sandbox  # noqa: E402
+
+# When Docker is unavailable (e.g. local dev without Docker daemon), fall back to
+# a clean subprocess execution so control flow tests remain 100% deterministic.
+_real_execute_code = sandbox.execute_code
+
+
+def _safe_execute_code(code: str, timeout_seconds: int = 10, **kwargs):
+    try:
+        return _real_execute_code(code, timeout_seconds, **kwargs)
+    except Exception:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        return {
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "exit_code": proc.returncode,
+            "timed_out": False,
+        }
+
+
+sandbox.execute_code = _safe_execute_code
 
 
 class StubClient:
@@ -48,7 +75,7 @@ async def scenario(name: str, replies: list[str]) -> tuple[int, list[Execution],
             executions.append(event)
         elif isinstance(event, Delta):
             text += event.text
-    print(f"\n── {name}")
+    print(f"\n-- {name}")
     print(f"   model calls   : {client.calls}")
     print(f"   executions    : {len(executions)} -> exit codes {[e.exit_code for e in executions]}")
     return client.calls, executions, text
@@ -94,6 +121,11 @@ async def main() -> int:
 
     print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILED'}")
     return 1 if failures else 0
+
+
+def test_coder_correction() -> None:
+    """Pytest test case verifying Coder Agent control flow."""
+    assert asyncio.run(main()) == 0
 
 
 if __name__ == "__main__":
